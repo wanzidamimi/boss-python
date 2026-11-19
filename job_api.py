@@ -429,7 +429,7 @@ def parse_args():
     parser.add_argument("--detail-limit", type=int, default=0, help="额外抓取前 N 条详情")
     parser.add_argument("--capture", default="", help="指定抓包 JSON 文件")
     parser.add_argument("--cookies", default="", help="指定已保存的 Cookie JSON 文件")
-    parser.add_argument("--delay", type=float, default=8.0, help="翻页基础延迟秒数")
+    parser.add_argument("--delay", type=float, default=3.0, help="翻页基础延迟秒数")
     parser.add_argument("--prefix", default="", help="输出文件名前缀")
     return parser.parse_args()
 

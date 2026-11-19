@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import queue
 import subprocess
@@ -38,7 +39,7 @@ class TaskRequest(BaseModel):
     pages: int = 1
     page_size: int = 15
     detail_limit: int = 0
-    delay: float = 8.0
+    delay: float = 3.0
 
 
 def run_cmd(args, timeout):
@@ -97,7 +98,6 @@ def worker():
             if not candidates:
                 raise RuntimeError("job_api.py produced no JSON output")
 
-            import json
             rows = json.loads(candidates[-1].read_text(encoding="utf-8"))
             inserted = db.insert_jobs(task_id, rows)
             db.update_task_status(
@@ -127,6 +127,16 @@ def startup_event():
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/cities")
+def cities():
+    """返回 BOSS 城市中文名 -> 9 位编码码表，供前端城市选择使用。"""
+    path = STATIC_DIR / "city_codes.json"
+    try:
+        return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"city codes load error: {exc}")
 
 
 @app.post("/api/tasks")
