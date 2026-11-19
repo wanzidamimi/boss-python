@@ -16,24 +16,26 @@ if exist ".env" (
     )
 )
 
-:: 激活虚拟环境（当前目录或上级目录）
+:: 仅激活项目自身的虚拟环境；不要激活上级 .venv（那是京东项目的，缺 openpyxl/websockets）
 if exist "venv\Scripts\activate.bat" call "venv\Scripts\activate.bat"
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
-if exist "..\venv\Scripts\activate.bat" call "..\venv\Scripts\activate.bat"
-if exist "..\.venv\Scripts\activate.bat" call "..\.venv\Scripts\activate.bat"
 
-:: 定位 Python 解释器（优先 python，回退到 Windows 的 py 启动器）
-where python >nul 2>nul
-if errorlevel 1 (
-    where py >nul 2>nul
-    if errorlevel 1 (
-        echo 错误：未找到 python，请先安装 Python 并勾选"加入 PATH"。
-        pause
-        exit /b 1
-    )
-    set PYTHON=py
+:: 优先使用已装齐依赖的系统 Python（D:\Python313），其次回退到 PATH 里的 python / py
+if exist "D:\Python313\python.exe" (
+    set "PYTHON=D:\Python313\python.exe"
 ) else (
-    set PYTHON=python
+    where python >nul 2>nul
+    if errorlevel 1 (
+        where py >nul 2>nul
+        if errorlevel 1 (
+            echo 错误：未找到 python，请先安装 Python 并勾选"加入 PATH"。
+            pause
+            exit /b 1
+        )
+        set PYTHON=py
+    ) else (
+        set PYTHON=python
+    )
 )
 
 echo ============================================================

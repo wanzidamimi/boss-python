@@ -25,6 +25,7 @@ node_stringify_inputs.json
 *.bak
 .env
 .env.*
+!.env.example
 
 # 采集到的职位/公司数据（含个人信息）
 Luxuryend-Boss/sqlfile/
