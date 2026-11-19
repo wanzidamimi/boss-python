@@ -1,0 +1,92 @@
+-- ============================================================
+-- Boss 招聘采集库 初始化脚本
+-- 目标库: boss_recruit
+-- 约定: 主库可写，从库只读；应用只连接主库
+-- 注意: 必须以 utf8mb4 导入，否则中文注释会变成乱码
+--       mysql --default-character-set=utf8mb4 < init.sql
+-- ============================================================
+
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+CREATE DATABASE IF NOT EXISTS boss_recruit
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_unicode_ci;
+
+USE boss_recruit;
+
+-- ------------------------------------------------------------
+-- 采集任务表: 记录一次采集任务的入参、状态与结果统计
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tasks (
+  task_id      VARCHAR(64)  NOT NULL                COMMENT '任务唯一标识(12位十六进制)',
+  mode         VARCHAR(20)  NOT NULL                COMMENT '采集模式: recommend=推荐职位, search=关键词搜索',
+  keyword      VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '搜索关键词, 推荐模式为空',
+  city         VARCHAR(32)  NOT NULL DEFAULT ''     COMMENT '城市编码, 如 100010000; 为空时使用抓包默认值',
+  pages        INT          NOT NULL DEFAULT 1      COMMENT '计划采集页数, 1-10',
+  page_size    INT          NOT NULL DEFAULT 15     COMMENT '每页请求条数, 最大 15',
+  detail_limit INT          NOT NULL DEFAULT 0      COMMENT '额外抓取的职位详情条数, 0-3',
+  status       VARCHAR(20)  NOT NULL                COMMENT '任务状态: queued/running/success/failed',
+  message      TEXT         NULL                    COMMENT '状态说明或错误详情',
+  rows_count   INT          NOT NULL DEFAULT 0      COMMENT '成功入库的职位条数',
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '任务创建时间',
+  finished_at  DATETIME     NULL                    COMMENT '任务结束时间',
+  PRIMARY KEY (task_id),
+  KEY idx_tasks_status (status),
+  KEY idx_tasks_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='采集任务表: 记录每次采集任务的入参、状态与结果统计';
+
+-- ------------------------------------------------------------
+-- 职位表: 采集到的招聘职位明细, 同一任务内按 lid 去重
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS jobs (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  task_id         VARCHAR(64)  NOT NULL                COMMENT '所属采集任务 ID, 关联 tasks.task_id',
+  job_name        VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '职位名称',
+  salary_desc     VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '薪资描述原文, 未登录时为空',
+  job_experience  VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '经验要求, 如 3-5年',
+  job_degree      VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '学历要求, 如 本科',
+  city_name       VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '工作城市',
+  area_district   VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '区域名称, 如 浦东新区',
+  business_district VARCHAR(100) NOT NULL DEFAULT ''   COMMENT '商圈名称',
+  brand_name      VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '公司名称',
+  brand_industry  VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '公司行业',
+  brand_scale_name VARCHAR(100) NOT NULL DEFAULT ''    COMMENT '公司规模',
+  boss_name       VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '招聘者称呼',
+  boss_title      VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '招聘者职位头衔',
+  skills          TEXT         NULL                    COMMENT '技能标签, 多值以 | 分隔',
+  job_labels      TEXT         NULL                    COMMENT '职位标签, 多值以 | 分隔',
+  post_description TEXT        NULL                    COMMENT '职位描述正文',
+  address         TEXT         NULL                    COMMENT '详细工作地址',
+  encrypt_job_id  VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '职位加密 ID, 用于拼接详情页链接',
+  lid             VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '列表接口返回的职位标识, 任务内去重依据',
+  security_id     TEXT         NULL                    COMMENT '详情接口所需的一次性安全参数',
+  detail_url      TEXT         NULL                    COMMENT '职位详情页完整链接',
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_jobs_task_lid (task_id, lid),
+  KEY idx_jobs_job_name (job_name),
+  KEY idx_jobs_brand_name (brand_name),
+  KEY idx_jobs_city_name (city_name),
+  KEY idx_jobs_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='职位表: 采集到的招聘职位明细, 同一任务内按 lid 去重';
+
+-- ------------------------------------------------------------
+-- 健康检查表: 记录长时间运行中接口可用性与 token 存活情况
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS health_checks (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  probe_at      DATETIME     NOT NULL                COMMENT '探测时间',
+  api_code      INT          NOT NULL                COMMENT '接口返回码, 0 表示正常',
+  api_message   VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '接口返回信息',
+  token_age_min DECIMAL(10,2) NOT NULL DEFAULT 0    COMMENT '本次使用的 stoken 已存活分钟数',
+  token_len     INT          NOT NULL DEFAULT 0      COMMENT 'stoken 长度',
+  refreshed     TINYINT(1)   NOT NULL DEFAULT 0      COMMENT '本次探测前是否重新生成了 stoken',
+  ok            TINYINT(1)   NOT NULL DEFAULT 0      COMMENT '本次探测是否通过',
+  note          VARCHAR(255) NOT NULL DEFAULT ''     COMMENT '备注, 如异常原因',
+  PRIMARY KEY (id),
+  KEY idx_health_probe_at (probe_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='健康检查表: 记录长时间运行中接口可用性与 token 存活情况';

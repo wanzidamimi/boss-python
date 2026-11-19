@@ -1,0 +1,43 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+node_modules/
+
+# 登录凭据、安全 token、指纹与抓包数据
+data/
+captures/
+stoken_frozen_snapshot.json
+cookies.txt
+cookies*.json
+stoken*.json
+browser_fingerprint*.json
+login_snapshot*.json
+.env
+.env.*
+
+# 采集到的职位/公司数据（含个人信息）
+Luxuryend-Boss/sqlfile/
+Luxuryend-Boss/dataExtraction.ipynb
+
+# 上游仓库自身的 git 历史
+amaozhao-jobber/.git/
+amaozhao-jobber/.git_off/
+xiang-ys-api-collection/.git/
+xiang-ys-api-collection/.git_off/
+Luxuryend-Boss/.git/
+Luxuryend-Boss/.git_off/
+MuYu10086-Boss-Crawler/.git/
+MuYu10086-Boss-Crawler/.git_off/
+Mungeryang-boss_data/.git/
+Mungeryang-boss_data/.git_off/
+eatmoreduck-boss-zhipin-scraper/.git/
+eatmoreduck-boss-zhipin-scraper/.git_off/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

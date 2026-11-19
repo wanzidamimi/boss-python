@@ -1,0 +1,31 @@
+# 说明:
+#   项目默认连接已有的主库 scrapy-distributed-mysql-1 (127.0.0.1:3307)
+#   从库 mysql57 (3306) 为只读副本，应用禁止连接
+#   下面的 mysql 服务是可选的隔离实例，只有显式指定 profile 时才会启动，
+#   用于在不影响共享主库的情况下单独调试
+#
+#   启动独立实例: docker compose --profile standalone up -d
+
+services:
+  mysql:
+    image: mysql:5.7
+    container_name: boss-mysql-standalone
+    profiles: ["standalone"]
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: boss_recruit
+      MYSQL_USER: boss
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    ports:
+      - "3308:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  mysql_data:

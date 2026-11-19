@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boss 招聘采集台</title>
+  <style>
+    :root { --brand:#0f766e; --brand2:#14b8a6; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#eef2f7; }
+    * { box-sizing: border-box; }
+    html, body { margin:0; padding:0; }
+    body { font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; }
+    .hero { background:linear-gradient(120deg,#0f766e 0%,#0d9488 45%,#14b8a6 100%); color:#fff; padding:30px 0 66px; }
+    .wrap { max-width:1220px; margin:0 auto; padding:0 24px; }
+    .hero-inner { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; flex-wrap:wrap; }
+    .brand { display:flex; align-items:center; gap:14px; }
+    .logo { width:46px; height:46px; border-radius:13px; background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.28); display:grid; place-items:center; font-weight:800; font-size:22px; }
+    .hero h1 { margin:0; font-size:25px; letter-spacing:.3px; }
+    .hero p { margin:6px 0 0; font-size:13.5px; opacity:.92; }
+    .health { display:flex; align-items:center; gap:10px; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.26); padding:10px 16px; border-radius:999px; font-size:13px; }
+    .dot { width:9px; height:9px; border-radius:50%; background:#10b981; box-shadow:0 0 0 4px rgba(16,185,129,.22); }
+    .dot.bad { background:#ef4444; box-shadow:0 0 0 4px rgba(239,68,68,.22); }
+    .dot.idle { background:#f59e0b; box-shadow:0 0 0 4px rgba(245,158,11,.22); }
+    main { max-width:1220px; margin:-46px auto 40px; padding:0 24px; position:relative; }
+    .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:16px; margin-bottom:20px; }
+    .stat { background:#fff; border-radius:16px; box-shadow:0 10px 30px rgba(15,23,42,.07); padding:18px 20px; border:1px solid rgba(226,232,240,.9); }
+    .stat .label { font-size:12.5px; color:var(--muted); letter-spacing:.4px; }
+    .stat .value { font-size:28px; font-weight:700; margin-top:6px; }
+    .stat.teal { border-left:4px solid var(--brand2); } .stat.indigo { border-left:4px solid #6366f1; }
+    .stat.green { border-left:4px solid #10b981; } .stat.amber { border-left:4px solid #f59e0b; }
+    .card { background:#fff; border-radius:16px; box-shadow:0 10px 30px rgba(15,23,42,.07); padding:22px 24px; margin-bottom:20px; border:1px solid rgba(226,232,240,.9); }
+    .card-head { display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px; }
+    .card-head h2 { margin:0; font-size:16.5px; display:flex; align-items:center; gap:9px; }
+    .card-head h2::before { content:""; width:4px; height:17px; border-radius:3px; background:linear-gradient(var(--brand2),var(--brand)); }
+    .card-head .sub { font-size:12.5px; color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(175px,1fr)); gap:14px; }
+    label { display:block; font-size:12.5px; font-weight:600; margin-bottom:6px; color:#334155; }
+    .hint { font-size:11.5px; color:var(--muted); margin-top:5px; }
+    input, select { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; font-size:14px; background:#fbfdff; color:var(--text); outline:none; transition:.18s; }
+    input:focus, select:focus { border-color:var(--brand2); background:#fff; box-shadow:0 0 0 3px rgba(20,184,166,.16); }
+    input:disabled { background:#f1f5f9; color:var(--muted); cursor:not-allowed; }
+    button { border:none; border-radius:10px; padding:10px 18px; cursor:pointer; font-size:14px; font-weight:600; transition:.18s; display:inline-flex; align-items:center; gap:7px; }
+    .primary { background:linear-gradient(135deg,var(--brand2),var(--brand)); color:#fff; box-shadow:0 6px 16px rgba(15,118,110,.28); }
+    .primary:hover { transform:translateY(-1px); box-shadow:0 10px 22px rgba(15,118,110,.34); }
+    .primary:disabled { opacity:.6; cursor:not-allowed; transform:none; }
+    .secondary { background:#f1f5f9; color:#475569; }
+    .secondary:hover { background:#e2e8f0; }
+    .actions { margin-top:18px; display:flex; gap:10px; align-items:center; }
+    .table-wrap { overflow:auto; max-height:460px; border:1px solid var(--line); border-radius:12px; box-shadow:inset 0 -16px 12px -12px rgba(15,23,42,.14); }
+    table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
+    th { position:sticky; top:0; z-index:2; background:#f8fafc; color:var(--muted); font-weight:600; text-align:left; padding:11px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+    td { padding:11px 12px; border-bottom:1px solid #f1f5f9; white-space:nowrap; }
+    tbody tr:hover { background:#f8fffe; }
+    tbody tr:last-child td { border-bottom:none; }
+    .empty { padding:34px; text-align:center; color:var(--muted); font-size:13.5px; }
+    .status { display:inline-block; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:600; }
+    .queued { background:#fef3c7; color:#92400e; } .running { background:#dbeafe; color:#1d4ed8; }
+    .success { background:#d1fae5; color:#047857; } .failed { background:#fee2e2; color:#b91c1c; }
+    .salary { color:var(--brand); font-weight:700; }
+    td.msg { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:help; }
+    .muted { color:var(--muted); font-size:13px; }
+    .toast-wrap { position:fixed; right:22px; bottom:22px; display:flex; flex-direction:column; gap:10px; z-index:99; }
+    .toast { background:#0f172a; color:#fff; padding:12px 16px; border-radius:11px; font-size:13.5px; box-shadow:0 12px 30px rgba(15,23,42,.28); animation:slide .25s ease; max-width:360px; }
+    .toast.ok { background:linear-gradient(135deg,#059669,#10b981); } .toast.err { background:linear-gradient(135deg,#dc2626,#ef4444); }
+    @keyframes slide { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+    footer { text-align:center; color:var(--muted); font-size:12.5px; padding:10px 0 30px; }
+    code { background:#f1f5f9; padding:1px 6px; border-radius:5px; font-size:12.5px; }
+  </style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap hero-inner">
+    <div class="brand">
+      <div class="logo">B</div>
+      <div>
+        <h1>Boss 招聘采集控制中心</h1>
+        <p>浏览器 JS 运行时自动生成 stoken · 业务采集走纯接口 · 任务串行限速</p>
+      </div>
+    </div>
+    <div class="health">
+      <span class="dot idle" id="healthDot"></span>
+      <span id="healthText">接口状态检测中…</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="stats">
+    <div class="stat teal"><div class="label">职位总量</div><div class="value" id="sJobs">—</div></div>
+    <div class="stat indigo"><div class="label">任务总数</div><div class="value" id="sTasks">—</div></div>
+    <div class="stat green"><div class="label">今日任务</div><div class="value" id="sToday">—</div></div>
+    <div class="stat amber"><div class="label">失败任务</div><div class="value" id="sFailed">—</div></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>新建采集任务</h2>
+      <span class="sub">页数 1-10 · 详情最多 3 条 · 队列串行执行</span>
+    </div>
+    <div class="grid">
+      <div>
+        <label>采集模式</label>
+        <select id="mode">
+          <option value="recommend">推荐职位</option>
+          <option value="search">关键词搜索</option>
+        </select>
+      </div>
+      <div>
+        <label>关键词（搜索模式必填）</label>
+        <input id="keyword" placeholder="例如：python" />
+      </div>
+      <div>
+        <label>城市编码</label>
+        <input id="city" placeholder="留空使用抓包城市" />
+      </div>
+      <div>
+        <label>页数</label>
+        <input id="pages" type="number" value="1" min="1" max="10" />
+      </div>
+      <div>
+        <label>每页条数</label>
+        <input id="page_size" type="number" value="15" min="1" max="15" />
+      </div>
+      <div>
+        <label>详情条数</label>
+        <input id="detail_limit" type="number" value="0" min="0" max="3" />
+        <div class="hint">登录态列表的经验字段会被服务端降级，抓详情可取真实值</div>
+      </div>
+      <div>
+        <label>翻页基础延迟（秒）</label>
+        <input id="delay" type="number" value="8" min="2" />
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="submit">提交任务</button>
+      <span class="muted" id="submitMsg"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>任务列表</h2>
+      <span class="sub">每 5 秒自动刷新</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>任务ID</th><th>模式</th><th>关键词</th><th>城市</th><th>页数</th><th>状态</th><th>数据量</th><th>信息</th><th>创建时间</th></tr></thead>
+        <tbody id="taskBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>职位数据</h2>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="sub" id="jobCount">—</span>
+        <button class="secondary" onclick="doExport('csv')">导出 CSV</button>
+        <button class="secondary" onclick="doExport('excel')">导出 Excel</button>
+      </div>
+    </div>
+    <div class="grid" style="margin:14px 0;">
+      <input id="filterTask" placeholder="按任务 ID 筛选" />
+      <input id="filterKeyword" placeholder="按职位/公司筛选" />
+      <input id="filterCity" placeholder="按城市筛选" />
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>职位</th><th>薪资</th><th>经验</th><th>学历</th><th>城市</th><th>公司</th><th>HR</th><th>链接</th></tr></thead>
+        <tbody id="jobBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>仅用于学习研究 · 控制采集频率 · 遵守目标站规则</footer>
+</main>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+  function toast(text, kind) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + (kind || '');
+    el.textContent = text;
+    document.getElementById('toasts').appendChild(el);
+    setTimeout(() => el.remove(), 4200);
+  }
+
+  // 职位名、公司名、任务消息等均来自外部站点，插入 DOM 前必须转义
+  function esc(value) {
+    if (value === null || value === undefined) return '';
+    return String(value).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  // 仅放行 http/https，防止 javascript: 伪协议注入
+  function safeUrl(url) {
+    const raw = String(url || '').trim();
+    return /^https?:\/\//i.test(raw) ? raw : '';
+  }
+
+  const STATUS_TEXT = { queued: '排队中', running: '采集中', success: '成功', failed: '失败' };
+
+  async function api(url, options) {
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text);
+    }
+    return res.json();
+  }
+
+  async function loadStats() {
+    try {
+      const s = await api('/api/stats');
+      document.getElementById('sJobs').textContent = s.jobs_total;
+      document.getElementById('sTasks').textContent = s.tasks_total;
+      document.getElementById('sToday').textContent = s.tasks_today;
+      document.getElementById('sFailed').textContent = s.tasks_failed;
+      const h = s.latest_health;
+      const dot = document.getElementById('healthDot');
+      const text = document.getElementById('healthText');
+      if (!h) {
+        dot.className = 'dot idle';
+        text.textContent = '尚无健康探测记录';
+      } else if (h.ok) {
+        dot.className = 'dot';
+        text.textContent = `接口正常 · token 存活 ${Math.round(h.token_age_min)} 分钟`;
+      } else {
+        dot.className = 'dot bad';
+        text.textContent = `接口异常 code=${h.api_code} · ${h.api_message || ''}`;
+      }
+    } catch (e) {
+      document.getElementById('healthDot').className = 'dot bad';
+      document.getElementById('healthText').textContent = '数据库未连接';
+    }
+  }
+
+  async function loadTasks() {
+    try {
+      const tasks = await api('/api/tasks');
+      const body = document.getElementById('taskBody');
+      if (!tasks.length) {
+        body.innerHTML = '<tr><td colspan="9"><div class="empty">还没有任务，先在上面创建一个吧</div></td></tr>';
+        return;
+      }
+      body.innerHTML = tasks.map(t => `
+      <tr>
+        <td><code>${esc(t.task_id)}</code></td><td>${t.mode === 'search' ? '关键词搜索' : '推荐职位'}</td>
+        <td>${esc(t.keyword || '-')}</td>
+        <td>${esc(t.city || '-')}</td><td>${esc(t.pages)}</td>
+        <td><span class="status ${esc(t.status)}">${esc(STATUS_TEXT[t.status] || t.status)}</span></td>
+        <td>${esc(t.rows_count)}</td><td class="muted msg" title="${esc(t.message || '')}">${esc(t.message || '-')}</td>
+        <td class="muted">${esc(t.created_at || '')}</td>
+      </tr>`).join('');
+    } catch (e) {
+      toast('任务列表加载失败：' + e.message, 'err');
+    }
+  }
+
+  async function loadJobs() {
+    const params = new URLSearchParams({
+      task_id: document.getElementById('filterTask').value.trim(),
+      keyword: document.getElementById('filterKeyword').value.trim(),
+      city: document.getElementById('filterCity').value.trim(),
+      limit: 100
+    });
+    try {
+      const rows = await api('/api/jobs?' + params);
+      const body = document.getElementById('jobBody');
+      const counter = document.getElementById('jobCount');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="8"><div class="empty">暂无匹配数据</div></td></tr>';
+        counter.textContent = '共 0 条';
+        return;
+      }
+      counter.textContent = `共 ${rows.length} 条`;
+      body.innerHTML = rows.map(r => {
+        const url = safeUrl(r.detail_url);
+        const link = url
+          ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#0f766e;text-decoration:none">打开</a>`
+          : '-';
+        return `
+      <tr>
+        <td><strong>${esc(r.job_name)}</strong></td><td class="salary">${esc(r.salary_desc || '-')}</td>
+        <td>${esc(r.job_experience || '-')}</td><td>${esc(r.job_degree || '-')}</td>
+        <td>${esc(r.city_name || '-')}</td><td>${esc(r.brand_name || '-')}</td>
+        <td>${esc(r.boss_name || '-')}</td>
+        <td>${link}</td>
+      </tr>`;
+      }).join('');
+    } catch (e) {
+      toast('职位列表加载失败：' + e.message, 'err');
+    }
+  }
+
+  document.getElementById('submit').onclick = async () => {
+    const msg = document.getElementById('submitMsg');
+    const btn = document.getElementById('submit');
+    btn.disabled = true;
+    msg.textContent = '提交中...';
+    const payload = {
+      mode: document.getElementById('mode').value,
+      keyword: document.getElementById('keyword').value.trim(),
+      city: document.getElementById('city').value.trim(),
+      pages: Number(document.getElementById('pages').value),
+      page_size: Number(document.getElementById('page_size').value),
+      detail_limit: Number(document.getElementById('detail_limit').value),
+      delay: Number(document.getElementById('delay').value)
+    };
+    try {
+      const result = await api('/api/tasks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      msg.textContent = `已排队：${result.task_id}`;
+      toast('任务已入队：' + result.task_id, 'ok');
+      loadTasks();
+    } catch (e) {
+      msg.textContent = '提交失败：' + e.message;
+      toast('提交失败：' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  function doExport(format) {
+    const params = new URLSearchParams({
+      format,
+      task_id: document.getElementById('filterTask').value.trim(),
+      keyword: document.getElementById('filterKeyword').value.trim(),
+      city: document.getElementById('filterCity').value.trim()
+    });
+    toast('正在导出 ' + format.toUpperCase() + '…');
+    window.location.href = '/api/export?' + params;
+  }
+
+  ['filterTask', 'filterKeyword', 'filterCity'].forEach(id => {
+    document.getElementById(id).addEventListener('change', loadJobs);
+  });
+
+  document.getElementById('mode').onchange = function () {
+    const isSearch = document.getElementById('mode').value === 'search';
+    document.getElementById('keyword').disabled = !isSearch;
+    document.getElementById('keyword').placeholder = isSearch ? '例如：python（必填）' : '搜索模式可用';
+  };
+
+  loadStats();
+  loadTasks();
+  loadJobs();
+  setInterval(() => { loadStats(); loadTasks(); loadJobs(); }, 5000);
+</script>
+</body>
+</html>
