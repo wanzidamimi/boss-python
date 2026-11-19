@@ -9,6 +9,13 @@ chcp 65001 >nul
 :: ============================================================
 cd /d "%~dp0"
 
+:: 加载 .env 中的数据库等配置（文件已被 gitignore 排除，不会提交）
+if exist ".env" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+        set "%%A=%%B"
+    )
+)
+
 :: 激活虚拟环境（当前目录或上级目录）
 if exist "venv\Scripts\activate.bat" call "venv\Scripts\activate.bat"
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
