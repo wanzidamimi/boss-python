@@ -8,12 +8,21 @@ node_modules/
 # 登录凭据、安全 token、指纹与抓包数据
 data/
 captures/
-stoken_frozen_snapshot.json
 cookies.txt
 cookies*.json
-stoken*.json
+cookies*.json.bak*
+*stoken*.json
 browser_fingerprint*.json
+browser_trace*.json
 login_snapshot*.json
+login_ttl*.csv
+login_ttl*.json
+stoken_ttl*.csv
+stability_*.csv
+stability_*.json
+node_trace*.json
+node_stringify_inputs.json
+*.bak
 .env
 .env.*
 
