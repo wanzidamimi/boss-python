@@ -1,6 +1,9 @@
+import argparse
 import asyncio
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 
 import requests
 import websockets
@@ -8,6 +11,7 @@ import websockets
 from config import CDP_DEBUG_PORT, DATA_DIR, TARGET_URL
 
 COOKIE_PATH = DATA_DIR / "cookies_logged.json"
+CDP_PORT = CDP_DEBUG_PORT
 PAGE_SETTLE_SECONDS = 10
 STOKEN_COOKIE = "__zp_stoken__"
 
@@ -19,8 +23,13 @@ def load_cookies():
 
 def save_browser_cookies(browser_cookies):
     """把浏览器当前产出的完整 Cookie 落盘，供 requests 直接使用。"""
-    data = json.loads(COOKIE_PATH.read_text(encoding="utf-8"))
-    items = {item["name"]: item for item in data["cookies"]}
+    data = {}
+    if COOKIE_PATH.exists():
+        try:
+            data = json.loads(COOKIE_PATH.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            data = {}
+    items = {item["name"]: item for item in data.get("cookies", [])}
     for name, value in browser_cookies.items():
         if name in items:
             items[name]["value"] = value
@@ -33,6 +42,7 @@ def save_browser_cookies(browser_cookies):
             }
     data["cookies"] = list(items.values())
     data["stoken_generated_at"] = datetime.now().isoformat(timespec="seconds")
+    data["cdp_port"] = CDP_PORT
     COOKIE_PATH.write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -40,7 +50,7 @@ def save_browser_cookies(browser_cookies):
 
 def _pick_page_target():
     targets = requests.get(
-        f"http://127.0.0.1:{CDP_DEBUG_PORT}/json/list", timeout=5
+        f"http://127.0.0.1:{CDP_PORT}/json/list", timeout=5
     ).json()
     pages = [t for t in targets if t.get("type") == "page"]
     for target in pages:
@@ -53,7 +63,7 @@ async def refresh_browser_cookies():
     """重新加载目标页，读取浏览器自产的 stoken 与配套 Cookie。"""
     target = _pick_page_target()
     if not target:
-        raise RuntimeError(f"no chrome page target on CDP port {CDP_DEBUG_PORT}")
+        raise RuntimeError(f"no chrome page target on CDP port {CDP_PORT}")
 
     async with websockets.connect(
         target["webSocketDebuggerUrl"],
@@ -109,7 +119,31 @@ async def refresh_browser_cookies():
         return browser_cookies
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="从浏览器 CDP 刷新 stoken 与 Cookie")
+    parser.add_argument("--port", type=int, default=0,
+                        help="CDP 端口；不传则从凭证文件的 cdp_port 读，再退回默认 9223")
+    parser.add_argument("--cookies", default="",
+                        help="Cookie 文件路径；默认 data/cookies_logged.json")
+    return parser.parse_args()
+
+
 def main():
+    global CDP_PORT, COOKIE_PATH
+    args = parse_args()
+    if args.cookies:
+        COOKIE_PATH = Path(args.cookies)
+    else:
+        COOKIE_PATH = Path(os.getenv("BOSS_COOKIE_PATH", str(DATA_DIR / "cookies_logged.json")))
+
+    if args.port:
+        CDP_PORT = args.port
+    elif COOKIE_PATH.exists():
+        try:
+            CDP_PORT = int(json.loads(COOKIE_PATH.read_text(encoding="utf-8")).get("cdp_port") or CDP_DEBUG_PORT)
+        except (ValueError, OSError):
+            CDP_PORT = CDP_DEBUG_PORT
+
     browser_cookies = asyncio.run(refresh_browser_cookies())
     stoken = browser_cookies.get(STOKEN_COOKIE, "")
     if not stoken:
@@ -117,8 +151,8 @@ def main():
             "browser did not expose __zp_stoken__, page may be blocked"
         )
     save_browser_cookies(browser_cookies)
-    print(f"[stoken] browser-issued token len={len(stoken)} prefix={stoken[:8]}")
-    print(f"[stoken] cookies synced: {len(browser_cookies)} items")
+    print(f"[stoken] port={CDP_PORT} token len={len(stoken)} prefix={stoken[:8]}")
+    print(f"[stoken] cookies synced: {len(browser_cookies)} items -> {COOKIE_PATH}")
 
 
 if __name__ == "__main__":

@@ -204,11 +204,16 @@ def reload_session_cookies(session: requests.Session, path: Path | None = None) 
 
 
 def refresh_stoken_runtime(
-    session: requests.Session, cookie_path: Path | None = None
+    session: requests.Session, cookie_path: Path | None = None, port: int = 0
 ) -> str:
     """重新触发浏览器产出 stoken（刷新目标页 + 读取浏览器 Cookie），并同步回 session。"""
+    cmd = [sys.executable, "stoken_browser.py"]
+    if port:
+        cmd += ["--port", str(port)]
+    if cookie_path:
+        cmd += ["--cookies", str(cookie_path)]
     result = subprocess.run(
-        [sys.executable, "stoken_browser.py"],
+        cmd,
         cwd=BASE_DIR,
         capture_output=True,
         text=True,
@@ -227,6 +232,7 @@ def with_token_refresh(
     *args,
     retries: int = 1,
     cookie_path: Path | None = None,
+    port: int = 0,
     **kwargs,
 ):
     try:
@@ -241,7 +247,7 @@ def with_token_refresh(
         else:
             # 环境类风控：stoken 与服务端期望失配，重新触发浏览器产令牌并退避
             try:
-                refresh_stoken_runtime(session, cookie_path)
+                refresh_stoken_runtime(session, cookie_path, port)
             except Exception as refresh_exc:
                 print(f"[refresh] stoken refresh failed: {refresh_exc}")
             time.sleep(BACKOFF_SECONDS)
@@ -252,6 +258,7 @@ def with_token_refresh(
             *args,
             retries=retries - 1,
             cookie_path=cookie_path,
+            port=port,
             **kwargs,
         )
 
@@ -429,6 +436,7 @@ def parse_args():
     parser.add_argument("--detail-limit", type=int, default=0, help="额外抓取前 N 条详情")
     parser.add_argument("--capture", default="", help="指定抓包 JSON 文件")
     parser.add_argument("--cookies", default="", help="指定已保存的 Cookie JSON 文件")
+    parser.add_argument("--port", type=int, default=0, help="CDP 端口；不传则从 Cookie 文件读取")
     parser.add_argument("--delay", type=float, default=3.0, help="翻页基础延迟秒数")
     parser.add_argument("--prefix", default="", help="输出文件名前缀")
     return parser.parse_args()
@@ -449,10 +457,12 @@ def main():
     state = "logged" if ("bst" in cookies or "zp_at" in cookies) else "unlogged"
     default_cookie_path = DATA_DIR / f"cookies_{state}.json"
 
+    # 多账号关键：--cookies 指定时，刷新/重试/保存全程用同一个文件，避免串号。
+    effective_cookie_path = default_cookie_path
     if args.cookies:
-        cookie_path = Path(args.cookies)
-        cookies = load_cookie_file(cookie_path)
-        print(f"[cookies] loaded {cookie_path}")
+        effective_cookie_path = Path(args.cookies)
+        cookies = load_cookie_file(effective_cookie_path)
+        print(f"[cookies] loaded {effective_cookie_path}")
     elif (
         default_cookie_path.exists()
         and default_cookie_path.stat().st_mtime > capture_path.stat().st_mtime
@@ -460,10 +470,21 @@ def main():
         cookies = load_cookie_file(default_cookie_path)
         print(f"[cookies] loaded newer {default_cookie_path}")
 
+    # CDP 端口：显式参数 > Cookie 文件内记录的 cdp_port > 0（用 stoken_browser 默认）
+    port = args.port
+    if not port and effective_cookie_path.exists():
+        try:
+            port = int(
+                json.loads(effective_cookie_path.read_text(encoding="utf-8")).get("cdp_port") or 0
+            )
+        except (ValueError, OSError):
+            port = 0
+
     session = make_session(cookies)
 
     print(f"[capture] {capture_path}")
     print(f"[state] {state}  [mode] {args.mode}  [city] {city}  [pages] {args.pages}")
+    print(f"[cookies] effective={effective_cookie_path}  [cdp_port] {port}")
 
     all_rows = []
     for page in range(1, args.pages + 1):
@@ -475,7 +496,8 @@ def main():
                 city,
                 page,
                 args.page_size,
-                cookie_path=default_cookie_path,
+                cookie_path=effective_cookie_path,
+                port=port,
             )
         else:
             if not args.keyword:
@@ -488,7 +510,8 @@ def main():
                 city,
                 page,
                 args.page_size,
-                cookie_path=default_cookie_path,
+                cookie_path=effective_cookie_path,
+                port=port,
             )
 
         jobs = zp_data.get("jobList", []) or []
@@ -503,7 +526,8 @@ def main():
                     fetch_detail,
                     job.get("securityId", ""),
                     job.get("lid", ""),
-                    cookie_path=default_cookie_path,
+                    cookie_path=effective_cookie_path,
+                    port=port,
                 )
                 time.sleep(random.uniform(3.0, 6.0))
             all_rows.append(flatten_job(job, detail))
@@ -520,7 +544,7 @@ def main():
             f"{sorted(DEGRADED_EXPERIENCE)}，建议用 --detail-limit 抓详情获取真实经验"
         )
 
-    save_cookie_file(session, default_cookie_path)
+    save_cookie_file(session, effective_cookie_path)
     prefix = args.prefix or f"boss_{args.mode}_{state}"
     json_path, csv_path = save_rows(all_rows, prefix)
     print(f"\n[OK] rows={len(all_rows)}")

@@ -59,6 +59,9 @@
     tbody tr:last-child td { border-bottom:none; }
     .empty { padding:34px; text-align:center; color:var(--muted); font-size:13.5px; }
     .status { display:inline-block; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:600; }
+    .badge-active { background:#d1fae5; color:#047857; } .badge-expired { background:#fee2e2; color:#b91c1c; }
+    .acct-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .mini { padding:5px 10px; font-size:12px; border-radius:8px; }
     .queued { background:#fef3c7; color:#92400e; } .running { background:#dbeafe; color:#1d4ed8; }
     .success { background:#d1fae5; color:#047857; } .failed { background:#fee2e2; color:#b91c1c; }
     .salary { color:var(--brand); font-weight:700; }
@@ -97,6 +100,26 @@
     <div class="stat amber"><div class="label">失败任务</div><div class="value" id="sFailed">—</div></div>
   </section>
 
+  <section class="card" id="accountCard">
+    <div class="card-head">
+      <h2>账号管理</h2>
+      <span class="sub">凭证仅存本机 · 弹出浏览器后请手动扫码/手机号登录</span>
+    </div>
+    <div class="actions" style="margin-top:0;margin-bottom:14px;">
+      <input id="newAccountLabel" placeholder="账号备注名，如：主账号 / 小号A" style="max-width:280px;" />
+      <button class="primary mini" id="addAccount">＋ 添加账号并登录</button>
+      <button class="secondary mini" id="refreshAccounts">刷新状态</button>
+      <span class="muted" id="accountMsg"></span>
+    </div>
+    <div class="table-wrap" style="max-height:260px;">
+      <table>
+        <thead><tr><th>备注名</th><th>BOSS用户ID</th><th>CDP端口</th><th>凭证状态</th><th>最近使用</th><th>操作</th></tr></thead>
+        <tbody id="accountBody"></tbody>
+      </table>
+    </div>
+    <div class="hint" style="margin-top:8px;" id="loginTip"></div>
+  </section>
+
   <section class="card">
     <div class="card-head">
       <h2>新建采集任务</h2>
@@ -109,6 +132,11 @@
           <option value="recommend">推荐职位</option>
           <option value="search">关键词搜索</option>
         </select>
+      </div>
+      <div>
+        <label>使用账号</label>
+        <select id="account"><option value="">自动轮询有效账号</option></select>
+        <div class="hint" id="accountSelHint">留空则轮流使用有效账号</div>
       </div>
       <div>
         <label>关键词（搜索模式必填）</label>
@@ -153,7 +181,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>任务ID</th><th>模式</th><th>关键词</th><th>城市</th><th>页数</th><th>状态</th><th>数据量</th><th>信息</th><th>创建时间</th></tr></thead>
+        <thead><tr><th>任务ID</th><th>模式</th><th>关键词</th><th>账号</th><th>城市</th><th>页数</th><th>状态</th><th>数据量</th><th>信息</th><th>创建时间</th></tr></thead>
         <tbody id="taskBody"></tbody>
       </table>
     </div>
@@ -279,6 +307,123 @@
     }
   });
 
+  // ---------- 账号管理 ----------
+  let ACCOUNTS = [];
+  const LOGIN_POLL = { timer: null, id: null };
+
+  async function loadAccounts() {
+    try {
+      ACCOUNTS = await api('/api/accounts');
+      renderAccounts();
+      renderAccountSelect();
+    } catch (e) {
+      // 账号接口异常时静默，避免干扰主流程
+    }
+  }
+
+  function renderAccounts() {
+    const body = document.getElementById('accountBody');
+    if (!ACCOUNTS.length) {
+      body.innerHTML = '<tr><td colspan="6"><div class="empty">还没有账号，点上方「添加账号并登录」开始</div></td></tr>';
+      return;
+    }
+    body.innerHTML = ACCOUNTS.map(a => {
+      const ok = a.status === 'active';
+      return `<tr>
+        <td><strong>${esc(a.label)}</strong></td>
+        <td>${esc(a.boss_user_id || '-')}</td>
+        <td>${esc(a.cdp_port)}</td>
+        <td><span class="badge-${ok ? 'active' : 'expired'}">${ok ? '有效' : '失效'}</span></td>
+        <td class="muted">${esc(a.last_used_at || '-')}</td>
+        <td><div class="acct-actions">
+          ${ok ? '' : `<button class="secondary mini" onclick="reloginAccount('${esc(a.account_id)}')">重新登录</button>`}
+          <button class="secondary mini" onclick="deleteAccount('${esc(a.account_id)}')">删除</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+  }
+
+  function renderAccountSelect() {
+    const sel = document.getElementById('account');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">自动轮询有效账号</option>' + ACCOUNTS.map(a =>
+      `<option value="${esc(a.account_id)}">${esc(a.label)}${a.status === 'active' ? '' : '（已失效）'}</option>`
+    ).join('');
+    sel.value = prev;
+    const active = ACCOUNTS.filter(a => a.status === 'active').length;
+    document.getElementById('accountSelHint').textContent =
+      ACCOUNTS.length ? `有效账号 ${active}/${ACCOUNTS.length} · 留空则轮流使用` : '暂无账号，将用默认凭证';
+  }
+
+  document.getElementById('addAccount').onclick = async () => {
+    const label = document.getElementById('newAccountLabel').value.trim();
+    const msg = document.getElementById('accountMsg');
+    const tip = document.getElementById('loginTip');
+    const btn = document.getElementById('addAccount');
+    btn.disabled = true;
+    msg.textContent = '正在打开浏览器...';
+    try {
+      const res = await api('/api/accounts/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({label})
+      });
+      tip.textContent = `账号「${label || '新账号'}」浏览器已打开（端口 ${res.cdp_port}），请在窗口内扫码或手机号登录，页面会自动检测...`;
+      toast('浏览器已打开，请扫码登录', 'ok');
+      startLoginPoll(res.account_id);
+    } catch (e) {
+      msg.textContent = '失败：' + e.message;
+      toast('打开浏览器失败：' + e.message, 'err');
+      btn.disabled = false;
+    }
+  };
+
+  function startLoginPoll(accountId) {
+    stopLoginPoll();
+    LOGIN_POLL.id = accountId;
+    let tries = 0;
+    LOGIN_POLL.timer = setInterval(async () => {
+      tries++;
+      if (tries > 120) { stopLoginPoll(); document.getElementById('addAccount').disabled = false;
+        document.getElementById('accountMsg').textContent = '登录超时，请重试'; return; }
+      try {
+        const res = await api(`/api/accounts/${accountId}/login-status`);
+        if (res.done) {
+          stopLoginPoll();
+          document.getElementById('addAccount').disabled = false;
+          document.getElementById('accountMsg').textContent = '登录成功';
+          document.getElementById('loginTip').textContent = '凭证已保存';
+          toast('登录成功，凭证已保存', 'ok');
+          loadAccounts();
+        }
+      } catch (e) { /* 继续轮询 */ }
+    }, 3000);
+  }
+
+  function stopLoginPoll() {
+    if (LOGIN_POLL.timer) { clearInterval(LOGIN_POLL.timer); LOGIN_POLL.timer = null; }
+  }
+
+  async function reloginAccount(id) {
+    try {
+      const res = await api(`/api/accounts/${id}/relogin`, {method: 'POST'});
+      toast('浏览器已打开，请重新登录', 'ok');
+      document.getElementById('loginTip').textContent = `账号浏览器已打开（端口 ${res.cdp_port}），请重新登录...`;
+      startLoginPoll(id);
+    } catch (e) { toast('失败：' + e.message, 'err'); }
+  }
+
+  async function deleteAccount(id) {
+    if (!confirm('确认删除这个账号及其凭证？')) return;
+    try {
+      await api(`/api/accounts/${id}`, {method: 'DELETE'});
+      toast('已删除', 'ok');
+      loadAccounts();
+    } catch (e) { toast('失败：' + e.message, 'err'); }
+  }
+
+  document.getElementById('refreshAccounts').onclick = loadAccounts;
+
   // 延迟值：优先读 Cookie，默认 3
   const delayEl = document.getElementById('delay');
   const savedDelay = getCookie('boss_delay');
@@ -327,13 +472,14 @@
       const tasks = await api('/api/tasks');
       const body = document.getElementById('taskBody');
       if (!tasks.length) {
-        body.innerHTML = '<tr><td colspan="9"><div class="empty">还没有任务，先在上面创建一个吧</div></td></tr>';
+        body.innerHTML = '<tr><td colspan="10"><div class="empty">还没有任务，先在上面创建一个吧</div></td></tr>';
         return;
       }
       body.innerHTML = tasks.map(t => `
       <tr>
         <td><code>${esc(t.task_id)}</code></td><td>${t.mode === 'search' ? '关键词搜索' : '推荐职位'}</td>
         <td>${esc(t.keyword || '-')}</td>
+        <td>${esc(t.account_label || '默认')}</td>
         <td>${esc(t.city || '-')}</td><td>${esc(t.pages)}</td>
         <td><span class="status ${esc(t.status)}">${esc(STATUS_TEXT[t.status] || t.status)}</span></td>
         <td>${esc(t.rows_count)}</td><td class="muted msg" title="${esc(t.message || '')}">${esc(t.message || '-')}</td>
@@ -392,7 +538,8 @@
       pages: Number(document.getElementById('pages').value),
       page_size: Number(document.getElementById('page_size').value),
       detail_limit: Number(document.getElementById('detail_limit').value),
-      delay: Number(document.getElementById('delay').value)
+      delay: Number(document.getElementById('delay').value),
+      account_id: document.getElementById('account').value
     };
     try {
       const result = await api('/api/tasks', {
@@ -400,8 +547,10 @@
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
       });
-      msg.textContent = `已排队：${result.task_id}`;
-      toast('任务已入队：' + result.task_id, 'ok');
+      const who = result.account_label ? `（账号：${result.account_label}）` : '';
+      msg.textContent = `已排队：${result.task_id}${who}`;
+      toast('任务已入队：' + result.task_id + who, 'ok');
+      if (result.warning) toast(result.warning, 'err');
       loadTasks();
     } catch (e) {
       msg.textContent = '提交失败：' + e.message;
@@ -433,10 +582,12 @@
   };
 
   loadCityCodes();
+  loadAccounts();
   loadStats();
   loadTasks();
   loadJobs();
   setInterval(() => { loadStats(); loadTasks(); loadJobs(); }, 5000);
+  setInterval(loadAccounts, 30000);
 </script>
 </body>
 </html>

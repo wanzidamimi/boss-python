@@ -53,6 +53,32 @@ def init_db():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
+            _ensure_schema(cur)
+
+
+def _ensure_schema(cur):
+    """对已存在的旧库做幂等升级：缺表建表、缺列补列。"""
+    cur.execute("CREATE TABLE IF NOT EXISTS accounts ("
+                "account_id VARCHAR(32) NOT NULL PRIMARY KEY, "
+                "label VARCHAR(64) NOT NULL, "
+                "boss_user_id VARCHAR(64) NOT NULL DEFAULT '', "
+                "cdp_port INT NOT NULL, "
+                "status VARCHAR(16) NOT NULL DEFAULT 'expired', "
+                "last_probe_at DATETIME NULL, "
+                "last_used_at DATETIME NULL, "
+                "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "KEY idx_accounts_status (status)"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+    cur.execute("SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tasks' AND COLUMN_NAME='account_id'")
+    if cur.fetchone()["c"] == 0:
+        cur.execute("ALTER TABLE tasks ADD COLUMN account_id VARCHAR(32) NOT NULL DEFAULT '' "
+                    "COMMENT '执行任务所用账号ID'")
+    cur.execute("SELECT COUNT(*) AS c FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tasks' AND COLUMN_NAME='account_label'")
+    if cur.fetchone()["c"] == 0:
+        cur.execute("ALTER TABLE tasks ADD COLUMN account_label VARCHAR(64) NOT NULL DEFAULT '' "
+                    "COMMENT '执行账号备注名快照'")
 
 
 def create_task(task: dict):
@@ -61,8 +87,9 @@ def create_task(task: dict):
             cur.execute(
                 """
                 INSERT IGNORE INTO tasks
-                  (task_id, mode, keyword, city, pages, page_size, detail_limit, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                  (task_id, mode, keyword, city, pages, page_size, detail_limit,
+                   account_id, account_label, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     task["task_id"],
@@ -72,6 +99,8 @@ def create_task(task: dict):
                     task["pages"],
                     task["page_size"],
                     task["detail_limit"],
+                    task.get("account_id", ""),
+                    task.get("account_label", ""),
                     "queued",
                 ),
             )
@@ -273,3 +302,67 @@ def query_all_jobs(task_id="", keyword="", city="") -> list[dict]:
                 params,
             )
             return cur.fetchall()
+
+
+# ---------------------------------------------------------------------------
+# 账号管理（多用户凭证的元数据；Cookie 本体存文件，不入库）
+# ---------------------------------------------------------------------------
+
+def list_accounts() -> list[dict]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM accounts ORDER BY created_at ASC"
+            )
+            return cur.fetchall()
+
+
+def get_account(account_id: str) -> dict | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM accounts WHERE account_id=%s", (account_id,))
+            return cur.fetchone()
+
+
+def create_account(account: dict) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO accounts (account_id, label, boss_user_id, cdp_port, status) "
+                "VALUES (%s, %s, %s, %s, 'expired')",
+                (account["account_id"], account["label"],
+                 account.get("boss_user_id", ""), account["cdp_port"]),
+            )
+
+
+def update_account(account_id: str, **fields) -> None:
+    allowed = {"label", "boss_user_id", "cdp_port", "status",
+               "last_probe_at", "last_used_at"}
+    sets = [f"{k}=%s" for k in fields if k in allowed]
+    if not sets:
+        return
+    values = [fields[k] for k in fields if k in allowed]
+    values.append(account_id)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE accounts SET {', '.join(sets)} WHERE account_id=%s",
+                values,
+            )
+
+
+def delete_account(account_id: str) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM accounts WHERE account_id=%s", (account_id,))
+
+
+def pick_round_robin_account() -> dict | None:
+    """轮询：在 active 账号中选最久未使用（last_used_at 最旧，NULL 优先）的一个。"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM accounts WHERE status='active' "
+                "ORDER BY last_used_at ASC, created_at ASC LIMIT 1"
+            )
+            return cur.fetchone()

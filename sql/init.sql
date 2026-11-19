@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   pages        INT          NOT NULL DEFAULT 1      COMMENT '计划采集页数, 1-10',
   page_size    INT          NOT NULL DEFAULT 15     COMMENT '每页请求条数, 最大 15',
   detail_limit INT          NOT NULL DEFAULT 0      COMMENT '额外抓取的职位详情条数, 0-3',
+  account_id   VARCHAR(32)  NOT NULL DEFAULT ''     COMMENT '执行该任务所用的账号ID; 空为旧任务/轮询',
+  account_label VARCHAR(64) NOT NULL DEFAULT ''     COMMENT '执行账号的备注名快照',
   status       VARCHAR(20)  NOT NULL                COMMENT '任务状态: queued/running/success/failed',
   message      TEXT         NULL                    COMMENT '状态说明或错误详情',
   rows_count   INT          NOT NULL DEFAULT 0      COMMENT '成功入库的职位条数',
@@ -76,6 +78,23 @@ CREATE TABLE IF NOT EXISTS jobs (
 -- ------------------------------------------------------------
 -- 健康检查表: 记录长时间运行中接口可用性与 token 存活情况
 -- ------------------------------------------------------------
+-- ------------------------------------------------------------
+-- 账号表: 多用户凭证的元数据（Cookie 本体不入库，存 data/accounts/）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS accounts (
+  account_id    VARCHAR(32)  NOT NULL                COMMENT '账号唯一ID(短UUID)',
+  label         VARCHAR(64)  NOT NULL                COMMENT '用户备注名',
+  boss_user_id  VARCHAR(64)  NOT NULL DEFAULT ''     COMMENT 'BOSS返回的真实userId',
+  cdp_port      INT          NOT NULL                COMMENT '该账号专属CDP调试端口',
+  status        VARCHAR(16)  NOT NULL DEFAULT 'expired' COMMENT '凭证状态: active/expired',
+  last_probe_at DATETIME     NULL                    COMMENT '最近一次探活时间',
+  last_used_at  DATETIME     NULL                    COMMENT '最近一次被任务使用时间(轮询依据)',
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (account_id),
+  KEY idx_accounts_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='账号表: 多用户凭证元数据';
+
 CREATE TABLE IF NOT EXISTS health_checks (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
   probe_at      DATETIME     NOT NULL                COMMENT '探测时间',
