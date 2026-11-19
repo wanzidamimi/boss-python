@@ -49,6 +49,11 @@ class AccountLogin(BaseModel):
     label: str = ""
 
 
+class OpenLinkRequest(BaseModel):
+    url: str
+    task_id: str = ""
+
+
 def run_cmd(args, timeout):
     result = subprocess.run(
         [sys.executable] + args,
@@ -274,6 +279,31 @@ def api_relogin_account(account_id: str):
     db.update_account(account_id, status="expired")
     return {"account_id": account_id, "cdp_port": account["cdp_port"],
             "message": "浏览器已打开，请重新登录"}
+
+
+@app.post("/api/open-link")
+def api_open_link(req: OpenLinkRequest):
+    """在带登录态的浏览器里打开职位链接。
+
+    优先找到采集该职位的任务所用账号，用其登录浏览器打开；否则用默认 9223 浏览器。
+    """
+    from urllib.parse import urlparse
+
+    url = (req.url or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not (
+        parsed.netloc == "www.zhipin.com" or parsed.netloc.endswith(".zhipin.com")
+    ):
+        raise HTTPException(status_code=400, detail="只允许打开 zhipin.com 的链接")
+
+    account_id = ""
+    if req.task_id:
+        task = db.get_task(req.task_id)
+        if task:
+            account_id = task.get("account_id", "") or ""
+
+    result = am.open_link(url, account_id=account_id)
+    return result
 
 
 @app.post("/api/tasks")

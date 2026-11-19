@@ -130,6 +130,64 @@ async def _ws_get_cookies(ws_url: str) -> dict:
                 return {c["name"]: c["value"] for c in cookies}
 
 
+async def _ws_new_tab(ws_url: str, url: str) -> None:
+    """通过浏览器级 CDP 连接新建标签页并激活。"""
+    async with websockets.connect(ws_url, max_size=1_000_000, ping_interval=None) as ws:
+        await ws.send(json.dumps({
+            "id": 1,
+            "method": "Target.createTarget",
+            "params": {"url": url, "newWindow": False},
+        }))
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=5)
+        except Exception:
+            pass
+
+
+def _browser_ws_url(port: int) -> str:
+    ver = json.load(
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=5)
+    )
+    return ver["webSocketDebuggerUrl"]
+
+
+def open_link(url: str, account_id: str = "", default_port: int = 9223) -> dict:
+    """在带登录态的浏览器里打开链接。
+
+    优先用采集该数据的账号浏览器（独立 profile，登录态在该 profile 内）；
+    否则用默认 CDP 端口的浏览器。浏览器未运行时按其 profile 启动后再开标签。
+    返回 {"ok": bool, "via": 端口/方式, "message": ...}。
+    """
+    import db
+
+    port = default_port
+    prof = None
+    if account_id:
+        account = db.get_account(account_id)
+        if account:
+            port = int(account["cdp_port"])
+            prof = profile_dir(account_id)
+
+    # 端口未监听：尝试用对应 profile 启动浏览器（保持登录态），再打开目标链接
+    if _port_free(port):
+        if prof is None:
+            return {"ok": False, "via": "none",
+                    "message": f"浏览器(端口 {port})未运行且无对应账号 profile，请在账号管理中登录后再试"}
+        launch_browser(port, prof, url=url)
+        time.sleep(PAGE_SETTLE_SECONDS)
+        return {"ok": True, "via": f"启动账号浏览器:{port}",
+                "message": "已用该账号的登录浏览器打开"}
+
+    # 端口在跑：通过 CDP 新建标签页（带该 profile 的登录态）
+    try:
+        asyncio.run(_ws_new_tab(_browser_ws_url(port), url))
+        return {"ok": True, "via": f"CDP:{port}",
+                "message": "已在登录浏览器中打开新标签"}
+    except Exception as exc:
+        return {"ok": False, "via": f"CDP:{port}",
+                "message": f"CDP 打开失败: {str(exc)[:160]}"}
+
+
 def probe_login(cookies: dict) -> tuple[bool, int, str, str]:
     """探登录态。返回 (是否有效, code, message, boss_user_id)。"""
     session = requests.Session()

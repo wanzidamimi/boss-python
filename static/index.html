@@ -510,7 +510,7 @@
       body.innerHTML = rows.map(r => {
         const url = safeUrl(r.detail_url);
         const link = url
-          ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#0f766e;text-decoration:none">打开</a>`
+          ? `<button class="secondary mini" onclick="openJobLink(this)" data-url="${esc(url)}" data-task="${esc(r.task_id || '')}">打开</button>`
           : '-';
         return `
       <tr>
@@ -559,6 +559,34 @@
       btn.disabled = false;
     }
   };
+
+  async function openJobLink(btn) {
+    const url = btn.dataset.url;
+    const taskId = btn.dataset.task || '';
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '打开中…';
+    try {
+      const res = await api('/api/open-link', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url, task_id: taskId})
+      });
+      if (res.ok) {
+        toast(res.message || '已在登录浏览器中打开', 'ok');
+      } else {
+        // 后端无法用登录浏览器打开时，回退到系统默认浏览器
+        toast((res.message || '无法用登录浏览器打开') + '，已用默认浏览器打开', 'err');
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (e) {
+      toast('打开失败，已用默认浏览器：' + e.message, 'err');
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  }
 
   function doExport(format) {
     const params = new URLSearchParams({
