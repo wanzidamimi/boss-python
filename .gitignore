@@ -27,6 +27,13 @@ node_stringify_inputs.json
 .env.*
 !.env.example
 
+# GitHub 访问令牌（禁止上传）
+github_token.txt
+
+# DSH 本地插件产物（非项目代码）
+.dsh-asar/
+dsh-plugins/
+
 # 采集到的职位/公司数据（含个人信息）
 Luxuryend-Boss/sqlfile/
 Luxuryend-Boss/dataExtraction.ipynb

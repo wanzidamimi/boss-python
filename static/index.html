@@ -73,6 +73,31 @@
     @keyframes slide { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
     footer { text-align:center; color:var(--muted); font-size:12.5px; padding:10px 0 30px; }
     code { background:#f1f5f9; padding:1px 6px; border-radius:5px; font-size:12.5px; }
+    .modal-mask { display:none; position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:60; align-items:center; justify-content:center; padding:24px; }
+    .modal-mask.show { display:flex; }
+    .modal { background:#fff; border-radius:16px; width:min(880px,100%); max-height:86vh; display:flex; flex-direction:column; box-shadow:0 24px 60px rgba(15,23,42,.35); }
+    .modal-head { display:flex; justify-content:space-between; align-items:center; padding:18px 22px; border-bottom:1px solid var(--line); }
+    .modal-head h3 { margin:0; font-size:16px; }
+    .modal-head button { padding:4px 10px; font-size:18px; line-height:1; }
+    .modal-body { padding:20px 22px; overflow:auto; }
+    .detail-section { margin-bottom:18px; }
+    .detail-section h4 { margin:0 0 8px; font-size:13.5px; color:#334155; }
+    .detail-desc { white-space:pre-wrap; line-height:1.75; font-size:13.5px; color:#1e293b; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+    .tag { display:inline-block; background:#f0fdfa; color:#0f766e; border:1px solid #99f6e4; border-radius:999px; padding:3px 10px; font-size:12px; margin:0 6px 6px 0; }
+    .kv { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px 18px; font-size:13px; }
+    .kv div { color:#334155; } .kv b { color:#0f172a; font-weight:600; }
+    .detail-map { max-width:100%; border-radius:10px; border:1px solid var(--line); margin-top:8px; }
+    .avatar { width:38px; height:38px; border-radius:50%; object-fit:cover; vertical-align:middle; margin-right:8px; }
+    .mini-progress { display:flex; align-items:center; gap:8px; }
+    .mini-bar { width:64px; height:6px; background:#e2e8f0; border-radius:999px; overflow:hidden; }
+    .mini-bar i { display:block; height:100%; background:linear-gradient(90deg,#14b8a6,#0f766e); }
+    .task-link { cursor:pointer; color:var(--brand); text-decoration:underline; }
+    .pbar { height:14px; background:#e2e8f0; border-radius:999px; overflow:hidden; margin:12px 0 6px; }
+    .pbar i { display:block; height:100%; background:linear-gradient(90deg,#14b8a6,#0f766e); transition:width .3s; }
+    .pstats { display:flex; gap:24px; flex-wrap:wrap; margin:14px 0; }
+    .pstats div { font-size:12.5px; color:var(--muted); }
+    .pstats b { display:block; font-size:20px; color:#0f172a; margin-top:2px; }
+    .pevents { margin-top:14px; font-size:12.5px; color:#475569; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px 12px; max-height:200px; overflow:auto; white-space:pre-wrap; }
   </style>
 </head>
 <body>
@@ -98,6 +123,7 @@
     <div class="stat indigo"><div class="label">任务总数</div><div class="value" id="sTasks">—</div></div>
     <div class="stat green"><div class="label">今日任务</div><div class="value" id="sToday">—</div></div>
     <div class="stat amber"><div class="label">失败任务</div><div class="value" id="sFailed">—</div></div>
+    <div class="stat teal"><div class="label">详情版本</div><div class="value" id="sDetails">—</div></div>
   </section>
 
   <section class="card" id="accountCard">
@@ -159,8 +185,19 @@
       </div>
       <div>
         <label>详情条数</label>
-        <input id="detail_limit" type="number" value="0" min="0" max="3" />
-        <div class="hint">登录态列表的经验字段会被服务端降级，抓详情可取真实值</div>
+        <select id="detail_limit">
+          <option value="-1" selected>全部（列表有多少抓多少）</option>
+          <option value="0">不抓详情</option>
+          <option value="10">前 10 条</option>
+          <option value="20">前 20 条</option>
+          <option value="50">前 50 条</option>
+        </select>
+        <div class="hint">默认全部；详情由页面自身请求完成，不受每令牌 5 条限制</div>
+      </div>
+      <div>
+        <label>详情间隔（秒）</label>
+        <input id="detail_interval" type="number" value="20" min="2" max="600" />
+        <div class="hint">相邻两次详情请求的等待时间，默认 20 秒，自动记忆</div>
       </div>
       <div>
         <label>翻页基础延迟（秒）</label>
@@ -181,7 +218,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>任务ID</th><th>模式</th><th>关键词</th><th>账号</th><th>城市</th><th>页数</th><th>状态</th><th>数据量</th><th>信息</th><th>创建时间</th></tr></thead>
+        <thead><tr><th>任务ID</th><th>模式</th><th>关键词</th><th>账号</th><th>城市</th><th>页数</th><th>状态</th><th>进度</th><th>数据量</th><th>详情</th><th>信息</th><th>创建时间</th></tr></thead>
         <tbody id="taskBody"></tbody>
       </table>
     </div>
@@ -192,6 +229,9 @@
       <h2>职位数据</h2>
       <div style="display:flex;align-items:center;gap:12px;">
         <span class="sub" id="jobCount">—</span>
+        <label style="margin:0;display:flex;align-items:center;gap:6px;font-weight:500;">
+          <input type="checkbox" id="withDetails" style="width:auto;padding:0;" /> 含详情
+        </label>
         <button class="secondary" onclick="doExport('csv')">导出 CSV</button>
         <button class="secondary" onclick="doExport('excel')">导出 Excel</button>
       </div>
@@ -203,7 +243,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>职位</th><th>薪资</th><th>经验</th><th>学历</th><th>城市</th><th>公司</th><th>HR</th><th>链接</th></tr></thead>
+        <thead><tr><th>职位</th><th>薪资</th><th>经验</th><th>学历</th><th>城市</th><th>公司</th><th>HR</th><th>详情</th><th>链接</th></tr></thead>
         <tbody id="jobBody"></tbody>
       </table>
     </div>
@@ -211,6 +251,26 @@
 
   <footer>仅用于学习研究 · 控制采集频率 · 遵守目标站规则</footer>
 </main>
+
+<div class="modal-mask" id="detailMask" onclick="closeDetail(event)">
+  <div class="modal" id="detailModal">
+    <div class="modal-head">
+      <h3 id="detailTitle">职位详情</h3>
+      <button class="secondary" onclick="closeDetail()">×</button>
+    </div>
+    <div class="modal-body" id="detailBody"></div>
+  </div>
+</div>
+
+<div class="modal-mask" id="taskProgressMask" onclick="closeTaskProgress(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="taskProgressTitle">任务进度</h3>
+      <button class="secondary" onclick="closeTaskProgress()">×</button>
+    </div>
+    <div class="modal-body" id="taskProgressBody"></div>
+  </div>
+</div>
 
 <div class="toast-wrap" id="toasts"></div>
 
@@ -432,6 +492,15 @@
   }
   delayEl.addEventListener('change', () => setCookie('boss_delay', delayEl.value, 365));
 
+  // 详情间隔：优先读 Cookie，默认 60 秒
+  const detailIntervalEl = document.getElementById('detail_interval');
+  const savedDetailInterval = getCookie('boss_detail_interval');
+  if (savedDetailInterval !== null && !isNaN(Number(savedDetailInterval)) && Number(savedDetailInterval) >= 2) {
+    detailIntervalEl.value = savedDetailInterval;
+  }
+  detailIntervalEl.addEventListener('change',
+    () => setCookie('boss_detail_interval', detailIntervalEl.value, 365));
+
   async function api(url, options) {
     const res = await fetch(url, options);
     if (!res.ok) {
@@ -448,6 +517,7 @@
       document.getElementById('sTasks').textContent = s.tasks_total;
       document.getElementById('sToday').textContent = s.tasks_today;
       document.getElementById('sFailed').textContent = s.tasks_failed;
+      document.getElementById('sDetails').textContent = s.details_total;
       const h = s.latest_health;
       const dot = document.getElementById('healthDot');
       const text = document.getElementById('healthText');
@@ -467,22 +537,127 @@
     }
   }
 
+  // ---------- 任务进度 ----------
+  const PHASE_TEXT = {
+    prepare: '准备中', probe: '检测账号', browser: '启动浏览器', stoken: '刷新令牌',
+    list: '抓取列表', detail: '抓取详情', saving: '入库中',
+    done: '已完成', failed: '失败', aborted: '已中止',
+    queued: '排队中', running: '运行中', success: '已完成'
+  };
+
+  function progressPercent(p) {
+    if (!p) return 0;
+    if (p.phase === 'done') return 100;
+    if (p.phase === 'list') return p.pages ? Math.min(100, (p.page || 0) / p.pages * 100) : 0;
+    if (p.total) return Math.min(100, (p.done || 0) / p.total * 100);
+    return 0;
+  }
+
+  function progressLabel(p) {
+    if (!p) return '-';
+    if (p.phase === 'list') return `列表 ${p.page || 0}/${p.pages || 0} 页`;
+    if (['detail', 'aborted', 'failed'].includes(p.phase)) {
+      return `详情 ${p.done || 0}/${p.total || 0}`;
+    }
+    return PHASE_TEXT[p.phase] || p.phase;
+  }
+
+  function fmtEta(sec) {
+    if (!sec || sec <= 0) return '-';
+    if (sec < 60) return `${sec} 秒`;
+    const m = Math.round(sec / 60);
+    if (m < 60) return `${m} 分钟`;
+    return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+  }
+
+  function progressCell(t) {
+    const p = t.progress;
+    if (!p) return '<span class="muted">-</span>';
+    const pct = progressPercent(p);
+    return `<div class="mini-progress" title="${esc(progressLabel(p))}">
+      <div class="mini-bar"><i style="width:${pct}%"></i></div>
+      <span class="muted" style="font-size:12px;">${esc(progressLabel(p))}</span>
+    </div>`;
+  }
+
+  let taskProgressTimer = null;
+  let taskProgressId = '';
+
+  async function openTaskProgress(id) {
+    taskProgressId = id;
+    document.getElementById('taskProgressTitle').textContent = '任务 ' + id;
+    document.getElementById('taskProgressBody').innerHTML = '<div class="empty">加载中…</div>';
+    document.getElementById('taskProgressMask').classList.add('show');
+    await refreshTaskProgress();
+    if (taskProgressTimer) clearInterval(taskProgressTimer);
+    taskProgressTimer = setInterval(refreshTaskProgress, 1500);
+  }
+
+  async function refreshTaskProgress() {
+    if (!taskProgressId) return;
+    try {
+      const p = await api('/api/tasks/' + encodeURIComponent(taskProgressId) + '/progress');
+      document.getElementById('taskProgressBody').innerHTML = renderTaskProgress(p);
+      if (['done', 'failed', 'aborted'].includes(p.phase) && taskProgressTimer) {
+        clearInterval(taskProgressTimer);
+        taskProgressTimer = null;
+      }
+    } catch (e) {
+      document.getElementById('taskProgressBody').innerHTML =
+        `<div class="empty">进度加载失败：${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderTaskProgress(p) {
+    const pct = progressPercent(p);
+    const events = (p.events || []).slice(-10).map(x => '· ' + esc(x)).join('\n');
+    return `
+      <div class="muted">阶段：<strong>${esc(PHASE_TEXT[p.phase] || p.phase || '-')}</strong>
+        ${p.message ? ' · ' + esc(p.message) : ''}</div>
+      <div class="pbar"><i style="width:${pct}%"></i></div>
+      <div class="muted" style="font-size:12.5px;">${esc(progressLabel(p))} · ${Math.round(pct)}%</div>
+      <div class="pstats">
+        <div>成功<b>${esc(p.ok || 0)}</b></div>
+        <div>失败<b>${esc(p.failed || 0)}</b></div>
+        <div>跳过<b>${esc(p.skipped || 0)}</b></div>
+        <div>总数<b>${esc(p.total || 0)}</b></div>
+        <div>预计剩余<b>${esc(fmtEta(p.eta_seconds))}</b></div>
+      </div>
+      ${p.current ? `<div class="muted">当前：${esc(p.current)}</div>` : ''}
+      ${events ? `<div class="pevents">${events}</div>` : ''}
+      <div class="muted" style="margin-top:10px;font-size:12px;">更新于 ${esc((p.updated_at || '').replace('T', ' '))}</div>`;
+  }
+
+  function closeTaskProgress(ev) {
+    if (ev && ev.target !== ev.currentTarget) return;
+    if (taskProgressTimer) {
+      clearInterval(taskProgressTimer);
+      taskProgressTimer = null;
+    }
+    taskProgressId = '';
+    document.getElementById('taskProgressMask').classList.remove('show');
+  }
+
   async function loadTasks() {
     try {
       const tasks = await api('/api/tasks');
       const body = document.getElementById('taskBody');
       if (!tasks.length) {
-        body.innerHTML = '<tr><td colspan="10"><div class="empty">还没有任务，先在上面创建一个吧</div></td></tr>';
+        body.innerHTML = '<tr><td colspan="12"><div class="empty">还没有任务，先在上面创建一个吧</div></td></tr>';
         return;
       }
       body.innerHTML = tasks.map(t => `
       <tr>
-        <td><code>${esc(t.task_id)}</code></td><td>${t.mode === 'search' ? '关键词搜索' : '推荐职位'}</td>
+        <td><code class="task-link" onclick="openTaskProgress('${esc(t.task_id)}')">${esc(t.task_id)}</code></td>
+        <td>${t.mode === 'search' ? '关键词搜索' : '推荐职位'}</td>
         <td>${esc(t.keyword || '-')}</td>
         <td>${esc(t.account_label || '默认')}</td>
         <td>${esc(t.city || '-')}</td><td>${esc(t.pages)}</td>
         <td><span class="status ${esc(t.status)}">${esc(STATUS_TEXT[t.status] || t.status)}</span></td>
-        <td>${esc(t.rows_count)}</td><td class="muted msg" title="${esc(t.message || '')}">${esc(t.message || '-')}</td>
+        <td>${progressCell(t)}</td>
+        <td>${esc(t.rows_count)}</td>
+        <td class="muted">${esc(detailLabel(t))}</td>
+        <td class="muted msg" title="${esc(t.message || '')}">${esc(t.message || '-')}</td>
         <td class="muted">${esc(t.created_at || '')}</td>
       </tr>`).join('');
     } catch (e) {
@@ -502,7 +677,7 @@
       const body = document.getElementById('jobBody');
       const counter = document.getElementById('jobCount');
       if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="8"><div class="empty">暂无匹配数据</div></td></tr>';
+        body.innerHTML = '<tr><td colspan="9"><div class="empty">暂无匹配数据</div></td></tr>';
         counter.textContent = '共 0 条';
         return;
       }
@@ -512,12 +687,16 @@
         const link = url
           ? `<button class="secondary mini" onclick="openJobLink(this)" data-url="${esc(url)}" data-task="${esc(r.task_id || '')}">打开</button>`
           : '-';
+        const detailBtn = r.detail_id
+          ? `<button class="secondary mini" onclick="openDetail('${esc(r.lid)}')">查看</button>`
+          : '<span class="muted">未采集</span>';
         return `
       <tr>
         <td><strong>${esc(r.job_name)}</strong></td><td class="salary">${esc(r.salary_desc || '-')}</td>
         <td>${esc(r.job_experience || '-')}</td><td>${esc(r.job_degree || '-')}</td>
         <td>${esc(r.city_name || '-')}</td><td>${esc(r.brand_name || '-')}</td>
         <td>${esc(r.boss_name || '-')}</td>
+        <td>${detailBtn}</td>
         <td>${link}</td>
       </tr>`;
       }).join('');
@@ -538,6 +717,7 @@
       pages: Number(document.getElementById('pages').value),
       page_size: Number(document.getElementById('page_size').value),
       detail_limit: Number(document.getElementById('detail_limit').value),
+      detail_interval: Number(document.getElementById('detail_interval').value),
       delay: Number(document.getElementById('delay').value),
       account_id: document.getElementById('account').value
     };
@@ -559,6 +739,92 @@
       btn.disabled = false;
     }
   };
+
+  // ---------- 职位详情抽屉 ----------
+  function detailLabel(t) {
+    if (!t.detail_status || t.detail_status === 'none') return '-';
+    if (t.detail_status === 'blocked') return '风控中止';
+    const total = Number(t.detail_ok || 0) + Number(t.detail_fail || 0);
+    return `${Number(t.detail_ok || 0)}/${total}`;
+  }
+
+  function fmtTime(value) {
+    if (!value) return '';
+    return String(value).replace('T', ' ').replace(/\.\d+$/, '');
+  }
+
+  function closeDetail(ev) {
+    if (ev && ev.target !== ev.currentTarget) return;
+    document.getElementById('detailMask').classList.remove('show');
+  }
+
+  async function openDetail(lid) {
+    try {
+      const d = await api('/api/details/' + encodeURIComponent(lid));
+      document.getElementById('detailTitle').textContent = d.job_name || '职位详情';
+      document.getElementById('detailBody').innerHTML = renderDetail(d);
+      document.getElementById('detailMask').classList.add('show');
+    } catch (e) {
+      toast('详情加载失败：' + e.message, 'err');
+    }
+  }
+
+  function renderDetail(d) {
+    const kv = pairs => `<div class="kv">${pairs
+      .filter(p => p[1] !== null && p[1] !== undefined && p[1] !== '')
+      .map(p => `<div>${p[0]}：<b>${esc(p[1])}</b></div>`).join('')}</div>`;
+    const tags = value => (value || '').split('|').filter(Boolean)
+      .map(x => `<span class="tag">${esc(x)}</span>`).join('');
+    const section = (title, body) => body
+      ? `<div class="detail-section"><h4>${title}</h4>${body}</div>` : '';
+
+    const head = kv([
+      ['薪资', d.salary_desc],
+      ['经验', d.experience_name],
+      ['学历', d.degree_name],
+      ['城市', d.location_name],
+      ['状态', d.job_status_desc],
+      ['职能', d.position_name],
+    ]);
+    const desc = d.post_description
+      ? `<div class="detail-desc">${esc(d.post_description)}</div>` : '';
+    const skills = d.skills ? tags(d.skills) : '';
+    const company = kv([
+      ['公司', d.brand_name],
+      ['行业', d.brand_industry],
+      ['规模', d.brand_scale],
+      ['融资', d.brand_stage],
+      ['公司活跃', fmtTime(d.brand_active_at)],
+    ]);
+    const intro = d.brand_introduce
+      ? `<div class="detail-desc">${esc(d.brand_introduce)}</div>` : '';
+    const benefits = d.brand_labels ? tags(d.brand_labels) : '';
+    const addr = d.address
+      ? `<div class="detail-desc">${esc(d.address)}</div>` : '';
+    const map = d.static_map_url && safeUrl(d.static_map_url)
+      ? `<img class="detail-map" src="${esc(safeUrl(d.static_map_url))}" alt="公司位置" />` : '';
+    const coords = (d.longitude && d.latitude)
+      ? kv([['坐标', `${d.longitude}, ${d.latitude}`]]) : '';
+    const boss = kv([
+      ['BOSS', d.boss_name],
+      ['头衔', d.boss_title],
+      ['活跃', d.boss_active_desc],
+    ]);
+    const avatar = d.boss_avatar && safeUrl(d.boss_avatar)
+      ? `<img class="avatar" src="${esc(safeUrl(d.boss_avatar))}" alt="BOSS" />` : '';
+    const meta = `<div class="muted">共 ${Number(d.version_count || 1)} 个版本 · 最近采集 ${esc(fmtTime(d.captured_at))} · 已观测 ${Number(d.capture_count || 1)} 次</div>`;
+
+    return [
+      section('基本信息', head),
+      section('职位描述', desc),
+      section('技能标签', skills),
+      section('公司信息', company + intro),
+      section('福利标签', benefits),
+      section('工作地址', addr + map + coords),
+      section('招聘者', avatar + boss),
+      section('采集信息', meta),
+    ].join('');
+  }
 
   async function openJobLink(btn) {
     const url = btn.dataset.url;
@@ -591,6 +857,7 @@
   function doExport(format) {
     const params = new URLSearchParams({
       format,
+      with_details: document.getElementById('withDetails').checked ? 1 : 0,
       task_id: document.getElementById('filterTask').value.trim(),
       keyword: document.getElementById('filterKeyword').value.trim(),
       city: document.getElementById('filterCity').value.trim()

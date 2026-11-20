@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from config import BASE_DIR, CAPTURE_DIR, DATA_DIR
+from detail_hash import flatten_detail
+import progress_store
 
 # 服务端在登录态下会把列表接口的 jobExperience 统一降级成同一个值，
 # 真实经验只在职位详情接口返回；采集详情时以详情为准。
@@ -24,6 +26,11 @@ TOKEN_CODES = {120, 121, 122}
 RISK_CODES = {35, 36, 37}
 BACKOFF_SECONDS = 20
 STOKEN_TIMEOUT = 180
+
+# 详情阶段的节奏（浏览器引擎下由页面自动轮换 stoken，无条数上限）
+DETAIL_REFRESH_PAUSE = 30      # 主动刷新令牌后的缓冲（仅 requests 引擎）
+DETAIL_RISK_WAIT = 60          # 命中风控后刷新令牌再重试的等待
+DETAIL_DEFAULT_INTERVAL = 20.0
 
 BASE = "https://www.zhipin.com"
 RECOMMEND_URL = f"{BASE}/wapi/zpgeek/pc/recommend/job/list.json"
@@ -426,6 +433,200 @@ def save_rows(rows: list[dict], prefix: str) -> tuple[Path, Path]:
     return json_path, csv_path
 
 
+def _fetch_detail_robust(session, base_headers, security_id, lid, cookie_path, port):
+    """抓一条详情；命中风控码时刷新令牌重试一次。
+
+    返回 (api_code, zp_data, error, refreshed)。
+    - refreshed 表示本次是否触发过令牌刷新（用于统计与配额窗口重置）
+    """
+    try:
+        return 0, fetch_detail(session, base_headers, security_id, lid), "", False
+    except BossApiError as exc:
+        if exc.code not in RISK_CODES:
+            return exc.code, None, exc.message, False
+        print(f"[detail] risk code={exc.code}, refreshing stoken ...")
+        try:
+            refresh_stoken_runtime(session, cookie_path, port)
+            time.sleep(DETAIL_RISK_WAIT)
+            return 0, fetch_detail(session, base_headers, security_id, lid), "", True
+        except BossApiError as exc2:
+            return exc2.code, None, exc2.message, True
+        except Exception as exc2:
+            return -1, None, str(exc2)[:200], True
+    except Exception as exc:
+        return -1, None, str(exc)[:200], False
+
+
+def collect_details(session, base_headers, jobs, cookie_path, port, prefix, args,
+                    report=None, note=None):
+    """按间隔逐条抓详情，每满 N 条主动刷新令牌，遇风控连续失败则中止。
+
+    engine=browser 时走页面自身的 axios 实例（拦截器会自动轮换 stoken），
+    engine=requests 时退回纯接口 + 每 N 条刷新令牌。
+    返回详情信封（含每条请求的 code / 时间 / zpData），由调用方入库。
+    """
+    interval = max(1.0, float(args.detail_interval))
+    jitter = min(max(float(args.detail_jitter), 0.0), 0.5)
+    refresh_every = max(0, int(args.detail_refresh_every))
+    items = []
+    ok = failed = refreshes = 0
+    aborted = ""
+    consecutive_risk = 0
+    consecutive_engine_error = 0
+
+    engine = None
+    if args.detail_engine in ("auto", "browser") and port:
+        try:
+            import browser_detail
+            engine = browser_detail.BrowserDetail(port)
+            engine.ensure_ready()
+            print("[detail] engine=browser (page axios)", flush=True)
+        except Exception as exc:
+            if args.detail_engine == "browser":
+                raise
+            print(f"[detail] browser engine unavailable ({exc}), fallback to requests",
+                  flush=True)
+            engine = None
+
+    # 布隆去重：已采集过的职位直接跳过（阳性再查 MySQL 确认，误判不漏采）
+    dedupe = None
+    confirm = None
+    if getattr(args, "skip_collected", True):
+        try:
+            import db
+            import detail_dedupe
+            dedupe = detail_dedupe.DetailDedupe.from_env()
+            confirm = db.has_detail_by_encrypt_id
+        except Exception as exc:
+            print(f"[detail] dedupe disabled: {exc}", flush=True)
+
+    pending = list(jobs)
+    skipped = []
+    if dedupe is not None:
+        pending = []
+        for job in jobs:
+            encrypt_id = job.get("encryptJobId") or job.get("encryptId") or ""
+            if dedupe.should_fetch(encrypt_id, confirm):
+                pending.append(job)
+            else:
+                skipped.append(encrypt_id)
+        if skipped:
+            print(f"[detail] skipped {len(skipped)} already collected", flush=True)
+
+    for index, job in enumerate(pending):
+        if index > 0:
+            wait = interval * (1 + random.uniform(-jitter, jitter))
+            print(f"[detail] {index + 1}/{len(pending)} wait {wait:.0f}s", flush=True)
+            time.sleep(wait)
+        lid = job.get("lid", "")
+        security_id = job.get("securityId", "")
+        encrypt_id = job.get("encryptJobId") or job.get("encryptId") or ""
+        requested_at = datetime.now()
+        if engine is not None:
+            code, zp_data, error = engine.fetch_job(job)
+            refreshed = False
+        else:
+            code, zp_data, error, refreshed = _fetch_detail_robust(
+                session, base_headers, security_id, lid, cookie_path, port
+            )
+        if refreshed:
+            refreshes += 1
+
+        if code == 0 and zp_data is not None:
+            ok += 1
+            consecutive_risk = 0
+            consecutive_engine_error = 0
+            items.append({
+                "lid": lid,
+                "security_id": security_id,
+                "requested_at": requested_at.isoformat(timespec="seconds"),
+                "api_code": 0,
+                "error": "",
+                "zpData": zp_data,
+            })
+            print(f"[detail] ok lid={lid} desc={len((zp_data.get('jobInfo') or {}).get('postDescription') or '')}",
+                  flush=True)
+            if dedupe is not None:
+                dedupe.mark(encrypt_id)
+            # 主动续令牌：仅 requests 引擎需要（browser 引擎由页面拦截器自动轮换）
+            if (
+                engine is None
+                and refresh_every
+                and not refreshed
+                and ok % refresh_every == 0
+                and index < len(pending) - 1
+            ):
+                try:
+                    refresh_stoken_runtime(session, cookie_path, port)
+                    refreshes += 1
+                    print(f"[detail] stoken refreshed after {ok} items", flush=True)
+                    time.sleep(DETAIL_REFRESH_PAUSE)
+                except Exception as exc:
+                    print(f"[detail] stoken refresh failed: {exc}", flush=True)
+        else:
+            failed += 1
+            items.append({
+                "lid": lid,
+                "security_id": security_id,
+                "requested_at": requested_at.isoformat(timespec="seconds"),
+                "api_code": code,
+                "error": error,
+                "zpData": None,
+            })
+            print(f"[detail] fail lid={lid} code={code} {error}", flush=True)
+            if note is not None:
+                note(f"详情失败 {lid} code={code}")
+            if code in RISK_CODES:
+                consecutive_risk += 1
+                if consecutive_risk >= 2:
+                    aborted = f"code={code}: {error}"
+                    print(f"[detail] aborted: {aborted}", flush=True)
+                    break
+            elif code == -1 and (
+                "上下文" in error or "undefined" in error or "MISSING" in error
+            ):
+                # 页面上下文反复重建仍失败：快速中止，避免空转几十分钟
+                consecutive_engine_error += 1
+                if consecutive_engine_error >= 3:
+                    aborted = f"engine-lost: {error}"
+                    print(f"[detail] aborted: {aborted}", flush=True)
+                    break
+            else:
+                consecutive_engine_error = 0
+
+        if report is not None:
+            done = ok + failed
+            current_name = lid
+            if code == 0 and zp_data is not None:
+                current_name = (zp_data.get("jobInfo") or {}).get("jobName") or lid
+            report(
+                phase="detail",
+                done=done,
+                total=len(pending),
+                ok=ok,
+                failed=failed,
+                skipped=len(skipped),
+                current=current_name,
+                eta_seconds=int(max(0, len(pending) - done) * interval),
+            )
+
+    envelope = {
+        "requested": len(jobs),
+        "ok": ok,
+        "failed": failed,
+        "skipped": len(skipped),
+        "aborted": aborted,
+        "stoken_refreshes": refreshes,
+        "items": items,
+    }
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = DATA_DIR / f"{prefix}_details_{ts}.json"
+    path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[detail] saved {path} ok={ok} failed={failed} skipped={len(skipped)} "
+          f"refreshes={refreshes}", flush=True)
+    return envelope, path
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Boss 直聘接口采集探针（自动使用最新抓包登录态）")
     parser.add_argument("--mode", choices=["recommend", "search"], default="recommend")
@@ -433,12 +634,29 @@ def parse_args():
     parser.add_argument("--city", default="", help="城市编码，默认取抓包文件")
     parser.add_argument("--pages", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=15)
-    parser.add_argument("--detail-limit", type=int, default=0, help="额外抓取前 N 条详情")
+    parser.add_argument("--detail-limit", type=int, default=-1,
+                        help="详情条数：-1=全部（默认），0=不抓，N=前 N 条")
+    parser.add_argument("--detail-interval", type=float, default=DETAIL_DEFAULT_INTERVAL,
+                        help="详情请求间隔秒数（默认 20）")
+    parser.add_argument("--detail-jitter", type=float, default=0.2,
+                        help="间隔随机抖动比例（0-0.5，默认 0.2）")
+    parser.add_argument("--detail-refresh-every", type=int, default=5,
+                        help="每成功 N 条主动刷新令牌（仅 requests 引擎，默认 5）")
+    parser.add_argument("--detail-engine", choices=["auto", "browser", "requests"],
+                        default="auto",
+                        help="详情请求引擎：browser=页面 axios（推荐），requests=纯接口")
+    parser.add_argument("--skip-collected", dest="skip_collected",
+                        action="store_true", default=True,
+                        help="布隆过滤器跳过已采集职位（默认开）")
+    parser.add_argument("--no-skip-collected", dest="skip_collected",
+                        action="store_false",
+                        help="关闭布隆去重，全部重新采集")
     parser.add_argument("--capture", default="", help="指定抓包 JSON 文件")
     parser.add_argument("--cookies", default="", help="指定已保存的 Cookie JSON 文件")
     parser.add_argument("--port", type=int, default=0, help="CDP 端口；不传则从 Cookie 文件读取")
     parser.add_argument("--delay", type=float, default=3.0, help="翻页基础延迟秒数")
     parser.add_argument("--prefix", default="", help="输出文件名前缀")
+    parser.add_argument("--task-id", default="", help="任务ID，用于写进度文件")
     return parser.parse_args()
 
 
@@ -447,9 +665,31 @@ def main():
     if args.pages > 10:
         print(f"[WARN] pages={args.pages} too large, clamp to 10")
         args.pages = 10
-    if args.detail_limit > 3:
-        print(f"[WARN] detail-limit={args.detail_limit} too large, clamp to 3")
-        args.detail_limit = 3
+    if args.detail_limit < -1:
+        print(f"[WARN] detail-limit={args.detail_limit} invalid, treat as all (-1)")
+        args.detail_limit = -1
+
+    task_id = args.task_id
+    events = []
+    started_at = datetime.now().isoformat(timespec="seconds")
+
+    def note(message: str) -> None:
+        events.append(message)
+        if len(events) > 12:
+            del events[:-12]
+
+    def report(**fields) -> None:
+        if not task_id:
+            return
+        try:
+            progress_store.write_progress(
+                task_id, started_at=started_at, events=list(events), **fields
+            )
+        except Exception as exc:
+            print(f"[progress] write failed: {exc}", flush=True)
+
+    report(phase="list", page=0, pages=args.pages, done=0, total=0,
+           ok=0, failed=0, skipped=0)
 
     base_headers, cookies, captured_city, capture_path = load_latest_capture(args.capture)
     city = args.city or captured_city
@@ -487,6 +727,7 @@ def main():
     print(f"[cookies] effective={effective_cookie_path}  [cdp_port] {port}")
 
     all_rows = []
+    all_jobs = []
     for page in range(1, args.pages + 1):
         if args.mode == "recommend":
             zp_data = with_token_refresh(
@@ -517,20 +758,12 @@ def main():
         jobs = zp_data.get("jobList", []) or []
         print(f"[page {page}] got {len(jobs)} jobs, hasMore={zp_data.get('hasMore')}")
 
-        for index, job in enumerate(jobs):
-            detail = None
-            if index < args.detail_limit:
-                detail = with_token_refresh(
-                    session,
-                    base_headers,
-                    fetch_detail,
-                    job.get("securityId", ""),
-                    job.get("lid", ""),
-                    cookie_path=effective_cookie_path,
-                    port=port,
-                )
-                time.sleep(random.uniform(3.0, 6.0))
-            all_rows.append(flatten_job(job, detail))
+        for job in jobs:
+            all_jobs.append(job)
+            all_rows.append(flatten_job(job))
+
+        note(f"列表第 {page} 页：{len(jobs)} 条")
+        report(phase="list", page=page, pages=args.pages, jobs=len(all_jobs))
 
         if page < args.pages:
             time.sleep(args.delay + random.uniform(0, args.delay))
@@ -544,13 +777,56 @@ def main():
             f"{sorted(DEGRADED_EXPERIENCE)}，建议用 --detail-limit 抓详情获取真实经验"
         )
 
-    save_cookie_file(session, effective_cookie_path)
     prefix = args.prefix or f"boss_{args.mode}_{state}"
+    detail_envelope = None
+    if args.detail_limit and all_jobs:
+        targets = all_jobs if args.detail_limit < 0 else all_jobs[: args.detail_limit]
+        print(f"\n[detail] start: {len(targets)} items, interval={args.detail_interval}s")
+        report(phase="detail", page=args.pages, pages=args.pages, done=0,
+               total=len(targets), ok=0, failed=0, skipped=0, current="",
+               eta_seconds=int(len(targets) * float(args.detail_interval)))
+        detail_envelope, _ = collect_details(
+            session,
+            base_headers,
+            targets,
+            effective_cookie_path,
+            port,
+            prefix,
+            args,
+            report=report,
+            note=note,
+        )
+        if detail_envelope is not None:
+            ok_n = detail_envelope["ok"]
+            fail_n = detail_envelope["failed"]
+            skip_n = detail_envelope.get("skipped", 0)
+            if detail_envelope.get("aborted"):
+                report(phase="aborted", message=detail_envelope["aborted"],
+                       done=ok_n + fail_n, total=ok_n + fail_n + skip_n,
+                       ok=ok_n, failed=fail_n, skipped=skip_n, eta_seconds=0)
+            else:
+                report(phase="done", done=ok_n + fail_n,
+                       total=ok_n + fail_n + skip_n, ok=ok_n, failed=fail_n,
+                       skipped=skip_n, eta_seconds=0,
+                       finished_at=datetime.now().isoformat(timespec="seconds"))
+    else:
+        report(phase="done", message="仅采集列表", done=0, total=0, ok=0,
+               failed=0, skipped=0, eta_seconds=0,
+               finished_at=datetime.now().isoformat(timespec="seconds"))
+
+    save_cookie_file(session, effective_cookie_path)
     json_path, csv_path = save_rows(all_rows, prefix)
     print(f"\n[OK] rows={len(all_rows)}")
     print(f"[OK] cookies: {default_cookie_path}")
     print(f"[OK] json: {json_path}")
     print(f"[OK] csv:  {csv_path}")
+
+    if detail_envelope is not None:
+        print(
+            f"[OK] details: ok={detail_envelope['ok']} failed={detail_envelope['failed']} "
+            f"refreshes={detail_envelope['stoken_refreshes']} "
+            f"aborted={detail_envelope['aborted'] or '-'}"
+        )
 
     if all_rows:
         first = all_rows[0]

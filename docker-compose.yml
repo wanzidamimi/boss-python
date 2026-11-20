@@ -7,6 +7,23 @@
 #   启动独立实例: docker compose --profile standalone up -d
 
 services:
+  redis-bloom:
+    # 含 RedisBloom 模块（官方 redis:7 不带 BF.* 命令）
+    image: docker.m.daocloud.io/redis/redis-stack-server:latest
+    container_name: boss-redis-bloom
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis_bloom_data:/data
+    environment:
+      REDIS_ARGS: "--appendonly yes --maxmemory 512mb --maxmemory-policy noeviction"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
   mysql:
     image: mysql:5.7
     container_name: boss-mysql-standalone
@@ -29,3 +46,4 @@ services:
 
 volumes:
   mysql_data:
+  redis_bloom_data:
