@@ -58,3 +58,5 @@ eatmoreduck-boss-zhipin-scraper/.git_off/
 .DS_Store
 Thumbs.db
 *.log
+# Browser/test artifacts
+.playwright-cli/
