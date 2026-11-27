@@ -131,6 +131,31 @@ CREATE TABLE IF NOT EXISTS detail_requests (
   COMMENT='详情请求日志, 用于配额统计与健康观测'
 """
 
+JOB_SKILL_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS job_skills (
+  id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  detail_id         BIGINT UNSIGNED NOT NULL COMMENT '来源详情快照 job_details.id',
+  lid               VARCHAR(255) NOT NULL DEFAULT '',
+  task_id           VARCHAR(64)  NOT NULL DEFAULT '',
+  job_name          VARCHAR(255) NOT NULL DEFAULT '',
+  skill_name        VARCHAR(128) NOT NULL COMMENT '词典标准名',
+  category          VARCHAR(64)  NOT NULL DEFAULT '',
+  skill_level       VARCHAR(16)  NOT NULL DEFAULT 'required' COMMENT 'required/bonus',
+  evidence_sentence TEXT NULL COMMENT '命中技能的详情正文分句',
+  matched_alias     VARCHAR(128) NOT NULL DEFAULT '',
+  catalog_version   VARCHAR(32)  NOT NULL DEFAULT '',
+  extracted_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_job_skill (detail_id, skill_name, skill_level),
+  KEY idx_js_skill (skill_name, skill_level),
+  KEY idx_js_job_name (job_name),
+  KEY idx_js_category (category),
+  KEY idx_js_lid (lid),
+  KEY idx_js_task (task_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='职位详情正文抽取出的技能; 只用 post_description, 不用 jobs.skills'
+"""
+
 DETAIL_COLUMNS = (
     "content_hash", "job_name", "position_name", "salary_desc",
     "experience_name", "degree_name", "location_name", "address",
@@ -194,6 +219,7 @@ def _ensure_schema(cur):
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
     cur.execute(DETAIL_TABLE_DDL)
     cur.execute(DETAIL_REQUEST_DDL)
+    cur.execute(JOB_SKILL_TABLE_DDL)
 
     _add_column(cur, "accounts", "detail_blocked_until",
                 "detail_blocked_until DATETIME NULL COMMENT '详情风控冷却截止时间'")
@@ -790,4 +816,87 @@ def count_jobs_without_detail() -> int:
                 ")"
             )
             return cur.fetchone()["c"]
+
+
+# ---------------------------------------------------------------------------
+# 职位技能图谱：从 job_details.post_description 派生，不读 jobs.skills
+# ---------------------------------------------------------------------------
+def list_latest_details_with_description() -> list[dict]:
+    """每个 lid 只取最新一个含详情正文的快照；lid 为空时按 id 取最新。"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT d.id, d.lid, d.task_id, d.job_name, d.post_description
+                FROM job_details d
+                WHERE d.post_description IS NOT NULL AND d.post_description <> ''
+                  AND (
+                    (d.lid <> '' AND NOT EXISTS (
+                        SELECT 1 FROM job_details d2
+                        WHERE d2.lid = d.lid
+                          AND (d2.captured_at > d.captured_at
+                               OR (d2.captured_at = d.captured_at AND d2.id > d.id))
+                    ))
+                    OR (d.lid = '' AND NOT EXISTS (
+                        SELECT 1 FROM job_details d2
+                        WHERE d2.lid = '' AND d2.id > d.id
+                    ))
+                  )
+                ORDER BY d.lid, d.id
+                """
+            )
+            return cur.fetchall()
+
+
+def replace_job_skills(detail_id: int, rows: list[dict]) -> int:
+    """覆盖某个详情快照的抽取结果；rows 为空时等价于删除旧结果。"""
+    columns = (
+        "detail_id", "lid", "task_id", "job_name", "skill_name",
+        "category", "skill_level", "evidence_sentence", "matched_alias",
+        "catalog_version",
+    )
+    values = [
+        tuple(row.get(col, "" if col != "detail_id" else detail_id) for col in columns)
+        for row in rows
+    ]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM job_skills WHERE detail_id=%s", (detail_id,))
+            if values:
+                placeholders = ", ".join(["%s"] * len(columns))
+                cur.executemany(
+                    f"INSERT IGNORE INTO job_skills ({', '.join(columns)}) "
+                    f"VALUES ({placeholders})",
+                    values,
+                )
+            return len(values)
+
+
+def clear_job_skills() -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM job_skills")
+
+
+def query_job_skills(keyword: str = "", task_id: str = "") -> list[dict]:
+    """按职位名或采集关键词筛选技能行；keyword 为空表示全部。"""
+    where = ["1=1"]
+    params: list = []
+    if keyword:
+        like = f"%{keyword}%"
+        where.append("(js.job_name LIKE %s OR t.keyword LIKE %s)")
+        params.extend([like, like])
+    if task_id:
+        where.append("js.task_id = %s")
+        params.append(task_id)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT js.* FROM job_skills js "
+                "LEFT JOIN tasks t ON t.task_id = js.task_id "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY js.job_name, js.detail_id, js.skill_level, js.skill_name",
+                tuple(params),
+            )
+            return cur.fetchall()
 

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Boss 招聘采集台</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   <style>
     :root { --brand:#0f766e; --brand2:#14b8a6; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#eef2f7; }
     * { box-sizing: border-box; }
@@ -98,6 +99,27 @@
     .pstats div { font-size:12.5px; color:var(--muted); }
     .pstats b { display:block; font-size:20px; color:#0f172a; margin-top:2px; }
     .pevents { margin-top:14px; font-size:12.5px; color:#475569; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px 12px; max-height:200px; overflow:auto; white-space:pre-wrap; }
+    .skill-layout { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr); gap:16px; margin-top:16px; }
+    #skillChart { width:100%; height:460px; border:1px solid var(--line); border-radius:12px; background:#fbfdff; }
+    .skill-panel { display:flex; flex-direction:column; gap:12px; }
+    .skill-block { border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:#fbfdff; }
+    .skill-block h4 { margin:0 0 9px; font-size:13px; color:#334155; }
+    .skill-pills { display:flex; flex-wrap:wrap; gap:6px; }
+    .skill-pill { border:1px solid var(--line); background:#fff; color:#475569; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; font-weight:500; }
+    .skill-pill:hover { border-color:var(--brand2); color:var(--brand); }
+    .skill-pill.on { background:#0f766e; border-color:#0f766e; color:#fff; }
+    .skill-pill.ghost { background:#f1f5f9; }
+    .skill-metric { display:flex; align-items:baseline; gap:8px; }
+    .skill-metric b { font-size:26px; color:var(--brand); }
+    .skill-bar { height:8px; border-radius:999px; background:#e2e8f0; overflow:hidden; margin:7px 0 10px; }
+    .skill-bar i { display:block; height:100%; background:linear-gradient(90deg,#14b8a6,#0f766e); }
+    .skill-list { display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto; font-size:12.5px; }
+    .skill-list .row { display:flex; justify-content:space-between; gap:8px; padding:5px 8px; background:#fff; border:1px solid #f1f5f9; border-radius:8px; }
+    .skill-list .row.missing { border-left:3px solid #f59e0b; }
+    .skill-list .row.matched { border-left:3px solid #10b981; }
+    .skill-evidence { font-size:12px; color:#475569; line-height:1.6; }
+    .skill-evidence div { margin-bottom:7px; }
+    @media (max-width:900px) { .skill-layout { grid-template-columns:1fr; } #skillChart { height:380px; } }
   </style>
 </head>
 <body>
@@ -124,6 +146,53 @@
     <div class="stat green"><div class="label">今日任务</div><div class="value" id="sToday">—</div></div>
     <div class="stat amber"><div class="label">失败任务</div><div class="value" id="sFailed">—</div></div>
     <div class="stat teal"><div class="label">详情版本</div><div class="value" id="sDetails">—</div></div>
+  </section>
+
+  <section class="card" id="skillCard">
+    <div class="card-head">
+      <h2>职位技能图谱</h2>
+      <span class="sub" id="skillMeta">数据源：职位详情正文 · 不使用 skills 标签</span>
+    </div>
+    <div class="grid" style="grid-template-columns:minmax(220px,1.2fr) minmax(260px,1.4fr) auto;">
+      <div>
+        <label for="skillKeyword">目标职位</label>
+        <input id="skillKeyword" placeholder="例如：机械工程师 / Python / 造价" />
+        <div class="hint">按职位名称或采集关键词匹配</div>
+      </div>
+      <div>
+        <label for="skillUserInput">我已掌握的技能</label>
+        <input id="skillUserInput" placeholder="输入技能名后回车，或从下方词典点选" />
+        <div class="skill-pills" id="skillUserChips" style="margin-top:7px;"></div>
+      </div>
+      <div style="display:flex;align-items:end;">
+        <button class="primary" id="skillAnalyze">分析匹配度</button>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="secondary mini" id="skillRebuild">重建技能索引</button>
+      <span class="muted" id="skillMsg"></span>
+    </div>
+    <div class="skill-layout">
+      <div id="skillChart"></div>
+      <div class="skill-panel">
+        <div class="skill-block">
+          <h4>数据概览</h4>
+          <div id="skillSummary" class="muted">加载中…</div>
+        </div>
+        <div class="skill-block">
+          <h4>匹配结果</h4>
+          <div id="skillGap" class="skill-list"><div class="muted">先选择技能，再点「分析匹配度」</div></div>
+        </div>
+        <div class="skill-block">
+          <h4>学习顺序与原文依据</h4>
+          <div id="skillEvidence" class="skill-evidence muted">暂无</div>
+        </div>
+      </div>
+    </div>
+    <div class="skill-block" style="margin-top:14px;">
+      <h4>技能词典（点击选择，版本 <span id="skillVersion">—</span>）</h4>
+      <div id="skillCatalog" class="skill-pills"><span class="muted">词典加载中…</span></div>
+    </div>
   </section>
 
   <section class="card" id="accountCard">
@@ -866,6 +935,233 @@
     window.location.href = '/api/export?' + params;
   }
 
+  // ---------- 职位技能图谱 ----------
+  let skillCatalogData = {version: '', skills: []};
+  const selectedSkills = new Set();
+  let skillChart = null;
+  let lastGraphSummaryHtml = '';
+
+  function skillKeyword() {
+    return document.getElementById('skillKeyword').value.trim();
+  }
+
+  function addSkill(raw) {
+    const value = String(raw || '').trim();
+    if (!value) return;
+    const lower = value.toLowerCase();
+    const hit = (skillCatalogData.skills || []).find(s =>
+      s.name.toLowerCase() === lower ||
+      (s.aliases || []).some(a => String(a).toLowerCase() === lower)
+    );
+    selectedSkills.add(hit ? hit.name : value);
+    renderSkillChips();
+    renderCatalogChips();
+  }
+
+  function renderSkillChips() {
+    const box = document.getElementById('skillUserChips');
+    if (!selectedSkills.size) {
+      box.innerHTML = '<span class="muted">尚未选择</span>';
+      return;
+    }
+    box.innerHTML = [...selectedSkills].map(name =>
+      `<button type="button" class="skill-pill on ghost" data-remove-skill="${esc(name)}" title="点击移除">${esc(name)} ×</button>`
+    ).join('');
+    box.querySelectorAll('[data-remove-skill]').forEach(btn => {
+      btn.onclick = () => toggleSkill(btn.dataset.removeSkill);
+    });
+  }
+
+  function renderCatalogChips() {
+    const box = document.getElementById('skillCatalog');
+    if (!(skillCatalogData.skills || []).length) {
+      box.innerHTML = '<span class="muted">词典为空</span>';
+      return;
+    }
+    box.innerHTML = skillCatalogData.skills.map(s =>
+      `<button type="button" class="skill-pill ${selectedSkills.has(s.name) ? 'on' : ''}" data-skill="${esc(s.name)}" title="${esc(s.category)}">${esc(s.name)}</button>`
+    ).join('');
+    box.querySelectorAll('[data-skill]').forEach(btn => {
+      btn.onclick = () => toggleSkill(btn.dataset.skill);
+    });
+  }
+
+  function toggleSkill(name) {
+    if (selectedSkills.has(name)) selectedSkills.delete(name);
+    else selectedSkills.add(name);
+    renderSkillChips();
+    renderCatalogChips();
+  }
+
+  async function loadSkillCatalog() {
+    try {
+      skillCatalogData = await api('/api/skills/catalog');
+      document.getElementById('skillVersion').textContent = skillCatalogData.version || '—';
+      renderCatalogChips();
+      renderSkillChips();
+    } catch (e) {
+      document.getElementById('skillCatalog').textContent = '词典加载失败：' + e.message;
+    }
+  }
+
+  function renderSkillChart(graph) {
+    const el = document.getElementById('skillChart');
+    if (!graph.nodes || !graph.nodes.length) {
+      if (skillChart) { skillChart.clear(); }
+      el.innerHTML = '<div class="empty">没有匹配到技能数据。请先采集职位详情，或点「重建技能索引」。</div>';
+      return;
+    }
+    if (!window.echarts) {
+      el.innerHTML = '<div class="empty">ECharts 加载失败，请检查网络后刷新页面。</div>';
+      return;
+    }
+    if (!skillChart) skillChart = echarts.init(el);
+    else el.innerHTML = '';
+    const categories = [...new Set(graph.nodes.map(n => n.category || '未分类'))];
+    const maxCount = Math.max(...graph.nodes.map(n => n.required_count || 0), 1);
+    skillChart.setOption({
+      backgroundColor: 'transparent',
+      animationDuration: 500,
+      tooltip: {
+        formatter(p) {
+          if (p.dataType === 'node') {
+            const d = p.data;
+            return `<b>${esc(d.name)}</b><br/>分类：${esc(d.category)}<br/>必备职位：${d.required_count} · 加分职位：${d.bonus_count}<br/>${esc(d.evidence || '')}`;
+          }
+          return `${esc(p.data.source)} ↔ ${esc(p.data.target)}<br/>共现职位：${p.data.weight}`;
+        }
+      },
+      legend: [{type: 'scroll', data: categories, bottom: 0, textStyle: {fontSize: 11}}],
+      series: [{
+        type: 'force', roam: true, draggable: true, layoutAnimation: true,
+        categories: categories.map(name => ({name})),
+        data: graph.nodes.map(n => ({
+          id: n.id, name: n.name, category: n.category || '未分类',
+          value: n.required_count,
+          symbolSize: 18 + Math.round(28 * (n.required_count || 0) / maxCount),
+          label: {show: true, formatter: n.name, position: 'right', fontSize: 11},
+          evidence: n.evidence || '', required_count: n.required_count,
+          bonus_count: n.bonus_count
+        })),
+        links: graph.links.map(l => ({
+          source: l.source, target: l.target, weight: l.weight,
+          lineStyle: {width: Math.min(4, 1 + l.weight * 0.8), opacity: 0.35, curveness: 0.12}
+        })),
+        force: {repulsion: [120, 420], edgeLength: [70, 180], gravity: 0.12, friction: 0.8},
+        emphasis: {focus: 'adjacency', lineStyle: {width: 3, opacity: 0.8}}
+      }]
+    }, true);
+  }
+
+  function renderGraphSummary(graph) {
+    const m = graph.meta || {};
+    const positions = (graph.positions || []).slice(0, 6)
+      .map(p => `${esc(p.name)} (${p.job_count})`).join('、') || '—';
+    lastGraphSummaryHtml = `
+      <div class="skill-metric"><b>${m.job_count || 0}</b><span>个职位参与统计</span></div>
+      <div class="muted">正文抽取 ${m.skill_count || 0} 种技能，展示 ${m.shown_skill_count || 0} 种，共现边 ${m.link_count || 0} 条</div>
+      <div class="muted" style="margin-top:6px;">匹配职位：${positions}</div>
+      <div class="hint" style="margin-top:6px;">${esc(m.note || '')}</div>`;
+    document.getElementById('skillSummary').innerHTML = lastGraphSummaryHtml;
+  }
+
+  async function loadSkillGraph() {
+    const msg = document.getElementById('skillMsg');
+    msg.textContent = '图谱加载中…';
+    try {
+      const params = new URLSearchParams({keyword: skillKeyword(), limit: '40'});
+      const graph = await api('/api/skills/graph?' + params);
+      renderSkillChart(graph);
+      renderGraphSummary(graph);
+      msg.textContent = `已按「${skillKeyword() || '全部职位'}」统计`;
+      return graph;
+    } catch (e) {
+      msg.textContent = '图谱加载失败';
+      toast('技能图谱加载失败：' + e.message, 'err');
+      return null;
+    }
+  }
+
+  function renderMatch(result) {
+    const coverage = Number(result.coverage || 0);
+    document.getElementById('skillSummary').innerHTML = `
+      <div class="skill-metric"><b>${coverage}%</b><span>必备技能匹配度</span></div>
+      <div class="skill-bar"><i style="width:${coverage}%"></i></div>` + lastGraphSummaryHtml;
+
+    const rows = [
+      ...(result.matched_required || []).map(n => `<div class="row matched"><span>${esc(n.name)}</span><span>已掌握 · ${n.required_count} 个职位</span></div>`),
+      ...(result.missing_required || []).map(n => `<div class="row missing"><span>${esc(n.name)}</span><span>待学习 · ${n.required_count} 个职位</span></div>`)
+    ].join('');
+    document.getElementById('skillGap').innerHTML = rows ||
+      '<div class="muted">该职位没有抽取到必备技能</div>';
+
+    const order = result.learning_order || [];
+    document.getElementById('skillEvidence').innerHTML = order.length
+      ? order.map((x, i) => `<div><b>${i + 1}. ${esc(x.name)}</b> <span class="muted">${esc(x.category)} · ${x.required_count} 个职位</span><div class="hint">${esc(x.evidence || '')}</div></div>`).join('')
+      : '<div class="muted">全部必备技能已掌握</div>';
+
+    if ((result.unknown_skills || []).length) {
+      toast('词典未收录：' + result.unknown_skills.join('、'));
+    }
+  }
+
+  async function runSkillMatch() {
+    const btn = document.getElementById('skillAnalyze');
+    const msg = document.getElementById('skillMsg');
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = '分析中…';
+    try {
+      await loadSkillGraph();
+      const res = await api('/api/skills/match', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({keyword: skillKeyword(), user_skills: [...selectedSkills]})
+      });
+      renderMatch(res);
+      msg.textContent = `匹配完成，覆盖率 ${res.coverage}%`;
+    } catch (e) {
+      toast('匹配失败：' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  }
+
+  async function rebuildSkillIndex() {
+    const btn = document.getElementById('skillRebuild');
+    const msg = document.getElementById('skillMsg');
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = '重建中…';
+    msg.textContent = '正在从详情正文重建技能索引…';
+    try {
+      const res = await api('/api/skills/rebuild', {method: 'POST'});
+      toast(`重建完成：扫描 ${res.details_scanned} 条详情，写入 ${res.rows_inserted} 条技能`, 'ok');
+      await loadSkillGraph();
+    } catch (e) {
+      msg.textContent = '重建失败';
+      toast('重建失败：' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  }
+
+  document.getElementById('skillAnalyze').onclick = runSkillMatch;
+  document.getElementById('skillRebuild').onclick = rebuildSkillIndex;
+  document.getElementById('skillUserInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addSkill(e.target.value);
+      e.target.value = '';
+    }
+  });
+  document.getElementById('skillKeyword').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); runSkillMatch(); }
+  });
+  window.addEventListener('resize', () => { if (skillChart) skillChart.resize(); });
+
   ['filterTask', 'filterKeyword', 'filterCity'].forEach(id => {
     document.getElementById(id).addEventListener('change', loadJobs);
   });
@@ -876,6 +1172,8 @@
     document.getElementById('keyword').placeholder = isSearch ? '例如：python（必填）' : '搜索模式可用';
   };
 
+  loadSkillCatalog();
+  loadSkillGraph();
   loadCityCodes();
   loadAccounts();
   loadStats();

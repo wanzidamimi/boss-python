@@ -19,6 +19,7 @@ from pydantic import BaseModel
 import account_manager as am
 import db
 import progress_store
+import skill_graph
 from detail_hash import flatten_detail
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -58,6 +59,11 @@ class AccountLogin(BaseModel):
 class OpenLinkRequest(BaseModel):
     url: str
     task_id: str = ""
+
+
+class SkillMatchRequest(BaseModel):
+    keyword: str = ""
+    user_skills: list[str] = []
 
 
 def log_line(log_path, message):
@@ -397,6 +403,45 @@ def cities():
         return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"city codes load error: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# 职位技能图谱 API（数据源：job_details.post_description）
+# ---------------------------------------------------------------------------
+@app.get("/api/skills/catalog")
+def api_skill_catalog():
+    try:
+        return skill_graph.get_catalog()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"skill catalog error: {exc}")
+
+
+@app.get("/api/skills/graph")
+def api_skill_graph(keyword: str = "", min_jobs: int = 1, limit: int = 40):
+    if min_jobs < 1 or min_jobs > 100:
+        raise HTTPException(status_code=400, detail="min_jobs must be 1-100")
+    if limit < 0 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be 0-200")
+    try:
+        return skill_graph.build_graph(keyword.strip(), min_jobs=min_jobs, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"skill graph error: {exc}")
+
+
+@app.post("/api/skills/match")
+def api_skill_match(req: SkillMatchRequest):
+    try:
+        return skill_graph.match_user(req.keyword.strip(), req.user_skills)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"skill match error: {exc}")
+
+
+@app.post("/api/skills/rebuild")
+def api_skill_rebuild():
+    try:
+        return skill_graph.rebuild_skill_index()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"skill rebuild error: {exc}")
 
 
 # ---------------------------------------------------------------------------

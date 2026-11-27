@@ -173,6 +173,33 @@ CREATE TABLE IF NOT EXISTS detail_requests (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='详情请求日志';
 
+-- ------------------------------------------------------------
+-- 职位技能表: 从 job_details.post_description 正文抽取的技能
+--   不使用 jobs.skills 标签，标签仅作展示参考
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS job_skills (
+  id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  detail_id         BIGINT UNSIGNED NOT NULL                COMMENT '来源详情快照 job_details.id',
+  lid               VARCHAR(255) NOT NULL DEFAULT ''       COMMENT '职位标识',
+  task_id           VARCHAR(64)  NOT NULL DEFAULT ''       COMMENT '采集任务 ID',
+  job_name          VARCHAR(255) NOT NULL DEFAULT ''       COMMENT '职位名称快照',
+  skill_name        VARCHAR(128) NOT NULL                  COMMENT '词典标准技能名',
+  category          VARCHAR(64)  NOT NULL DEFAULT ''       COMMENT '技能分类',
+  skill_level       VARCHAR(16)  NOT NULL DEFAULT 'required' COMMENT 'required=必备/bonus=加分',
+  evidence_sentence TEXT NULL                              COMMENT '命中的详情正文分句',
+  matched_alias     VARCHAR(128) NOT NULL DEFAULT ''       COMMENT '实际命中的别名',
+  catalog_version   VARCHAR(32)  NOT NULL DEFAULT ''       COMMENT '抽取所用词典版本',
+  extracted_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '抽取时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_job_skill (detail_id, skill_name, skill_level),
+  KEY idx_js_skill (skill_name, skill_level),
+  KEY idx_js_job_name (job_name),
+  KEY idx_js_category (category),
+  KEY idx_js_lid (lid),
+  KEY idx_js_task (task_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='职位详情正文抽取的技能';
+
 CREATE TABLE IF NOT EXISTS health_checks (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
   probe_at      DATETIME     NOT NULL                COMMENT '探测时间',
