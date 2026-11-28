@@ -26,14 +26,16 @@
     .primary { background:linear-gradient(135deg,var(--brand2),var(--brand)); color:#fff; }
     .secondary { background:#f1f5f9; color:#475569; }
     .danger { background:#fee2e2; color:#b91c1c; }
+    .mini { padding:6px 9px; font-size:12px; white-space:nowrap; }
     .muted, .hint { color:var(--muted); font-size:12.5px; }
     .table-wrap { overflow:auto; max-height:620px; border:1px solid var(--line); border-radius:12px; }
     table { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; }
     th { position:sticky; top:0; background:#f8fafc; text-align:left; color:var(--muted); padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
     td { padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
-    input { width:100%; min-width:110px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; background:#fbfdff; }
-    .evidence { max-width:330px; min-width:240px; white-space:normal; line-height:1.55; color:#475569; }
-    .suggestion { max-width:260px; min-width:220px; white-space:normal; line-height:1.5; color:#475569; }
+    td:last-child { white-space:nowrap; }
+    input { width:100%; min-width:96px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; background:#fbfdff; }
+    .evidence { max-width:300px; min-width:180px; white-space:normal; line-height:1.55; color:#475569; }
+    .suggestion { max-width:220px; min-width:170px; white-space:normal; line-height:1.5; color:#475569; }
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
     .pending { background:#fef3c7; color:#92400e; } .approved { background:#d1fae5; color:#047857; }
     .rejected { background:#fee2e2; color:#b91c1c; } .suggested { background:#ede9fe; color:#6d28d9; }
@@ -42,6 +44,11 @@
     .toast.ok { background:linear-gradient(135deg,#059669,#10b981); }
     .toast.err { background:linear-gradient(135deg,#dc2626,#ef4444); }
     .empty { padding:34px; text-align:center; color:var(--muted); }
+    .filter-bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px; padding:11px 13px; background:#f8fafc; border:1px solid var(--line); border-radius:12px; }
+    .filter-bar label { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); }
+    .filter-bar select, .filter-bar input { width:auto; min-width:120px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; background:#fff; }
+    .filter-bar input.search { min-width:230px; }
+    .filter-bar .hint { margin-left:auto; white-space:nowrap; }
   </style>
 </head>
 <body>
@@ -78,6 +85,29 @@
         <h2>候选列表</h2>
         <span class="sub" id="count">—</span>
       </div>
+      <div class="filter-bar">
+        <label>状态
+          <select id="filterStatus">
+            <option value="pending" selected>待处理</option>
+            <option value="approved">已加入</option>
+            <option value="rejected">已忽略</option>
+            <option value="all">全部</option>
+          </select>
+        </label>
+        <label>LLM
+          <select id="filterLlm">
+            <option value="all" selected>全部</option>
+            <option value="none">未判断</option>
+            <option value="suggested">有建议</option>
+            <option value="error">有错误</option>
+          </select>
+        </label>
+        <label>搜索
+          <input id="filterKeyword" class="search" placeholder="候选词 / 证据句 / 标准名称" />
+        </label>
+        <button class="secondary mini" id="resetFilter">重置</button>
+        <span class="hint" id="filterSummary"></span>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -96,6 +126,7 @@
 
   <script>
     function $(id) { return document.getElementById(id); }
+    let allCandidates = [];
     function esc(v) { if (v == null) return ''; return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function toast(text, kind) { const el=document.createElement('div'); el.className='toast '+(kind||''); el.textContent=text; $('toasts').appendChild(el); setTimeout(()=>el.remove(),4200); }
     async function api(url, options) { const res=await fetch(url, options); if(!res.ok) throw new Error((await res.text()).slice(0,300)); return res.json(); }
@@ -106,8 +137,50 @@
       if (s.is_skill) return `建议加入：${esc(s.canonical_name || '')}｜${esc(s.category || '')}｜置信度 ${s.confidence}`;
       return '不建议：' + esc(s.reason || '不是技能');
     }
-    function render(rows) {
-      $('count').textContent = rows.length ? `${rows.length} 条候选` : '暂无候选';
+    function llmBucket(r) {
+      const s = r.llm_status || '';
+      if (s === 'suggested') return 'suggested';
+      if (s === 'error') return 'error';
+      return 'none';
+    }
+    function filteredRows() {
+      const status = $('filterStatus').value;
+      const llm = $('filterLlm').value;
+      const kw = $('filterKeyword').value.trim().toLowerCase();
+      return allCandidates.filter(r => {
+        if (status !== 'all' && r.status !== status) return false;
+        if (llm !== 'all' && llmBucket(r) !== llm) return false;
+        if (kw) {
+          const s = r.llm_suggestion || {};
+          const hay = [r.raw_mention, r.normalized_key, r.evidence_sentence,
+            r.manual_name, s.canonical_name, s.category, s.reason, s.error]
+            .filter(Boolean).join(' ').toLowerCase();
+          if (!hay.includes(kw)) return false;
+        }
+        return true;
+      });
+    }
+    function updateFilterCounts() {
+      const counts = {pending:0, approved:0, rejected:0};
+      allCandidates.forEach(r => { if (r.status in counts) counts[r.status] += 1; });
+      const labels = {pending:'待处理', approved:'已加入', rejected:'已忽略', all:'全部'};
+      [...$('filterStatus').options].forEach(opt => {
+        opt.textContent = opt.value === 'all'
+          ? `${labels.all} (${allCandidates.length})`
+          : `${labels[opt.value]} (${counts[opt.value]})`;
+      });
+    }
+    function applyFilters() {
+      const rows = filteredRows();
+      render(rows, allCandidates.length);
+      $('filterSummary').textContent = allCandidates.length
+        ? `当前显示 ${rows.length} / ${allCandidates.length} 条` : '';
+    }
+    function render(rows, total) {
+      const all = typeof total === 'number' ? total : rows.length;
+      $('count').textContent = all
+        ? (rows.length === all ? `${all} 条候选` : `显示 ${rows.length} / ${all} 条候选`)
+        : '暂无候选';
       if (!rows.length) { $('candidateBody').innerHTML='<tr><td colspan="9"><div class="empty">暂无候选技能</div></td></tr>'; return; }
       $('candidateBody').innerHTML = rows.map(r => {
         const s = r.llm_suggestion;
@@ -133,7 +206,9 @@
     async function load() {
       try {
         const data = await api('/api/skills/candidates?limit=500');
-        render(data.items || []);
+        allCandidates = data.items || [];
+        updateFilterCounts();
+        applyFilters();
         const llm = data.llm || {};
         $('llmStatus').textContent = llm.configured
           ? `LLM 已配置：${llm.model}`
@@ -177,6 +252,15 @@
         toast(`已应用 ${res.applied} 条`,'ok'); await load();
       } catch(e) { toast('应用失败：'+e.message,'err'); }
       finally { $('applyBtn').disabled=false; $('msg').textContent=''; }
+    };
+    $('filterStatus').addEventListener('change', applyFilters);
+    $('filterLlm').addEventListener('change', applyFilters);
+    $('filterKeyword').addEventListener('input', applyFilters);
+    $('resetFilter').onclick = () => {
+      $('filterStatus').value = 'pending';
+      $('filterLlm').value = 'all';
+      $('filterKeyword').value = '';
+      applyFilters();
     };
     load();
   </script>

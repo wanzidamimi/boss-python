@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from pydantic import BaseModel
 
@@ -38,6 +39,7 @@ MIN_TASK_INTERVAL = float(os.getenv("BOSS_MIN_TASK_INTERVAL", "300"))
 STOKEN_WAIT = float(os.getenv("BOSS_STOKEN_WAIT", "60"))
 
 app = FastAPI(title="Boss 招聘采集服务")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class TaskRequest(BaseModel):
