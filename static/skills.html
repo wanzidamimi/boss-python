@@ -180,7 +180,7 @@
     function renderHeatmap(data) {
       const box = $('heatmapChart');
       if (!data || !data.length) {
-        if (heatChart) { heatChart.clear(); }
+        if (heatChart) { heatChart.dispose(); heatChart = null; }
         box.innerHTML = '<div class="empty">没有匹配到技能数据</div>';
         return;
       }
@@ -197,13 +197,17 @@
         }
       }));
       if (!window.echarts || typeof echarts.init !== 'function') {
+        if (heatChart) { heatChart.dispose(); heatChart = null; }
         box.innerHTML = '<div class="skill-pills" style="padding:24px;">' +
           cloudData.map(d => `<span class="pill" style="font-size:${d.textStyle.fontSize}px;color:${d.textStyle.color};font-weight:${d.textStyle.fontWeight};">${esc(d.name)}</span>`).join('') +
           '</div>';
         return;
       }
-      if (!heatChart) heatChart = echarts.init(box);
-      else box.innerHTML = '';
+      // 复用同一个 ECharts 实例；不要清空 box.innerHTML，否则会销毁实例持有的 canvas
+      if (!heatChart || !box.contains(heatChart.getDom())) {
+        box.innerHTML = '';
+        heatChart = echarts.init(box);
+      }
       heatChart.setOption({
         backgroundColor: 'transparent',
         tooltip: {
@@ -226,6 +230,7 @@
           data: cloudData
         }]
       }, true);
+      heatChart.resize();
     }
 
     function renderSkillTable(skills) {
