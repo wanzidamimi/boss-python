@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>职位技能图谱查询</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2.1.0/dist/echarts-wordcloud.min.js"></script>
+  <style>
+    :root { --brand:#0f766e; --brand2:#14b8a6; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#eef2f7; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+    .topnav { background:#0f172a; color:#fff; display:flex; align-items:center; gap:8px; padding:0 24px; height:54px; box-shadow:0 4px 18px rgba(15,23,42,.18); }
+    .topnav .mark { width:30px; height:30px; border-radius:9px; background:linear-gradient(135deg,#14b8a6,#0f766e); display:grid; place-items:center; font-weight:800; margin-right:8px; }
+    .topnav a { color:#cbd5e1; text-decoration:none; padding:8px 15px; border-radius:9px; font-size:13.5px; font-weight:600; }
+    .topnav a:hover { background:rgba(255,255,255,.08); color:#fff; }
+    .topnav a.active { background:rgba(20,184,166,.18); color:#5eead4; }
+    .hero { background:linear-gradient(120deg,#0f766e 0%,#0d9488 48%,#14b8a6 100%); color:#fff; padding:28px 0 62px; }
+    .wrap { max-width:1220px; margin:0 auto; padding:0 24px; }
+    .hero h1 { margin:0; font-size:25px; }
+    .hero p { margin:6px 0 0; font-size:13.5px; opacity:.92; }
+    main { max-width:1220px; margin:-44px auto 40px; padding:0 24px; position:relative; }
+    .card { background:#fff; border:1px solid rgba(226,232,240,.9); border-radius:16px; box-shadow:0 10px 30px rgba(15,23,42,.07); padding:22px 24px; margin-bottom:20px; }
+    .card-head { display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px; }
+    .card-head h2 { margin:0; font-size:16.5px; display:flex; align-items:center; gap:9px; }
+    .card-head h2::before { content:""; width:4px; height:17px; border-radius:3px; background:linear-gradient(var(--brand2),var(--brand)); }
+    .card-head .sub { font-size:12.5px; color:var(--muted); }
+    .query-row { display:grid; grid-template-columns:minmax(260px,1fr) auto auto; gap:10px; align-items:center; }
+    input { width:100%; padding:11px 13px; border:1px solid var(--line); border-radius:10px; font-size:14px; background:#fbfdff; outline:none; }
+    input:focus { border-color:var(--brand2); box-shadow:0 0 0 3px rgba(20,184,166,.16); }
+    button { border:none; border-radius:10px; padding:11px 18px; font-size:14px; font-weight:600; cursor:pointer; }
+    .primary { background:linear-gradient(135deg,var(--brand2),var(--brand)); color:#fff; box-shadow:0 6px 16px rgba(15,118,110,.25); }
+    .primary:hover { transform:translateY(-1px); }
+    .primary:disabled { opacity:.6; cursor:not-allowed; }
+    .secondary { background:#f1f5f9; color:#475569; }
+    .secondary:hover { background:#e2e8f0; }
+    .hint { font-size:12px; color:var(--muted); margin-top:8px; }
+    .suggestions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .suggestion { border:1px solid var(--line); background:#f8fafc; color:#475569; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; }
+    .suggestion:hover { border-color:var(--brand2); color:var(--brand); }
+    .heatmap { width:100%; height:460px; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg,#fbfdff,#f8fafc); }
+    .heat-legend { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:10px; }
+    .ramp { height:10px; width:180px; border-radius:999px; background:linear-gradient(90deg,#c7e5e0,#5eb5aa,#0f766e,#0f172a); }
+    .columns { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(300px,1fr); gap:20px; }
+    table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
+    th { position:sticky; top:0; background:#f8fafc; color:var(--muted); text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); font-size:12px; }
+    td { padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+    .table-wrap { max-height:520px; overflow:auto; border:1px solid var(--line); border-radius:12px; }
+    .badge { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
+    .core { background:#d1fae5; color:#047857; } .common { background:#dbeafe; color:#1d4ed8; }
+    .low { background:#fef3c7; color:#92400e; } .bonus { background:#f3e8ff; color:#7e22ce; }
+    .evidence { font-size:11.5px; color:var(--muted); line-height:1.55; max-width:460px; white-space:normal; }
+    .empty { padding:34px; text-align:center; color:var(--muted); font-size:13.5px; }
+    .path { display:flex; flex-direction:column; gap:8px; max-height:520px; overflow:auto; }
+    .path-item { border:1px solid var(--line); border-left:4px solid var(--brand2); border-radius:10px; padding:9px 12px; background:#fbfdff; }
+    .path-item b { font-size:13.5px; }
+    .path-item .meta { font-size:11.5px; color:var(--muted); margin-top:3px; }
+    .path-item .ev { font-size:11.5px; color:#475569; margin-top:5px; line-height:1.5; }
+    details.summary-card summary { cursor:pointer; font-weight:700; font-size:15px; }
+    .skill-pills { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+    .pill { border:1px solid var(--line); background:#fff; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; color:#475569; }
+    .pill.on { background:#0f766e; color:#fff; border-color:#0f766e; }
+    .match-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:12px; }
+    .match-box { border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:12.5px; line-height:1.7; }
+    .toast-wrap { position:fixed; right:22px; bottom:22px; display:flex; flex-direction:column; gap:10px; z-index:99; }
+    .toast { background:#0f172a; color:#fff; padding:12px 16px; border-radius:11px; font-size:13.5px; box-shadow:0 12px 30px rgba(15,23,42,.28); max-width:360px; }
+    .toast.ok { background:linear-gradient(135deg,#059669,#10b981); } .toast.err { background:linear-gradient(135deg,#dc2626,#ef4444); }
+    @media (max-width:900px) { .query-row { grid-template-columns:1fr; } .columns { grid-template-columns:1fr; } .heatmap { height:380px; } .match-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <nav class="topnav">
+    <div class="mark">B</div>
+    <a href="/">数据采集</a>
+    <a href="/skills" class="active">职位技能图谱</a>
+  </nav>
+
+  <header class="hero">
+    <div class="wrap">
+      <h1>职位技能图谱查询</h1>
+      <p>输入你要应聘的职位，直接看这个职位应该会哪些技能</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="card-head">
+        <h2>按职位查询技能</h2>
+        <span class="sub">数据源：职位详情正文 · 不使用 jobs.skills 标签</span>
+      </div>
+      <div class="query-row">
+        <input id="positionInput" placeholder="例如：爬虫工程师 / Python开发 / 机械工程师" />
+        <button class="primary" id="recommendBtn">查看该职位技能</button>
+        <button class="secondary" id="rebuildBtn">重建技能索引</button>
+      </div>
+      <div class="hint" id="queryMsg">输入职位名，回车或点击按钮查询。</div>
+      <div class="suggestions" id="suggestions"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>技能热力词云</h2>
+        <span class="sub" id="heatmapMeta">等待查询…</span>
+      </div>
+      <div class="heatmap" id="heatmapChart"><div class="empty">查询后显示技能热力图</div></div>
+      <div class="heat-legend"><span>低频</span><div class="ramp"></div><span>高频必备</span><span>· 字体越大、颜色越深 = 该职位要求得越多</span></div>
+    </section>
+
+    <div class="columns">
+      <section class="card">
+        <div class="card-head"><h2>技能清单</h2><span class="sub" id="skillCount">—</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>技能</th><th>要求级别</th><th>出现职位</th><th>分类</th><th>原文依据</th></tr></thead>
+            <tbody id="skillBody"><tr><td colspan="5"><div class="empty">暂无数据</div></td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>建议学习顺序</h2><span class="sub">先技术，后通用能力</span></div>
+        <div class="path" id="learningPath"><div class="empty">暂无数据</div></div>
+      </section>
+    </div>
+
+    <section class="card summary-card">
+      <details>
+        <summary>可选：看看我会哪些技能，还差什么</summary>
+        <div class="hint">从词典点选我已掌握的技能，再计算匹配度。</div>
+        <input id="userSkillInput" placeholder="输入技能名后回车，例如 python" style="margin-top:10px;max-width:320px;" />
+        <div class="skill-pills" id="userSkills"></div>
+        <div class="skill-pills" id="catalogSkills" style="margin-top:12px;"></div>
+        <div class="actions" style="margin-top:14px;">
+          <button class="primary" id="matchBtn">计算匹配度</button>
+          <span class="hint" id="matchMsg"></span>
+        </div>
+        <div class="match-grid">
+          <div class="match-box"><b>已具备</b><div id="matchedBox">—</div></div>
+          <div class="match-box"><b>待学习</b><div id="missingBox">—</div></div>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <div class="toast-wrap" id="toasts"></div>
+
+  <script>
+    function $(id) { return document.getElementById(id); }
+    function esc(value) {
+      if (value === null || value === undefined) return '';
+      return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function toast(text, kind) {
+      const el = document.createElement('div');
+      el.className = 'toast ' + (kind || '');
+      el.textContent = text;
+      $('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 4200);
+    }
+    async function api(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error((await res.text()).slice(0, 300));
+      return res.json();
+    }
+    function heatColor(t) {
+      const stops = [[199,229,224],[94,181,170],[15,118,110],[15,23,42]];
+      const scaled = Math.max(0, Math.min(0.999, t)) * (stops.length - 1);
+      const i = Math.floor(scaled);
+      const f = scaled - i;
+      const a = stops[i], b = stops[i + 1];
+      const rgb = a.map((v, idx) => Math.round(v + (b[idx] - v) * f));
+      return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    }
+
+    let heatChart = null;
+    let latestResult = null;
+    let catalog = {skills: []};
+    const selectedSkills = new Set();
+
+    function renderHeatmap(data) {
+      const box = $('heatmapChart');
+      if (!data || !data.length) {
+        if (heatChart) { heatChart.clear(); }
+        box.innerHTML = '<div class="empty">没有匹配到技能数据</div>';
+        return;
+      }
+      const cloudData = data.map(d => ({
+        name: d.name,
+        value: d.value,
+        level: d.level,
+        category: d.category,
+        evidence: d.evidence,
+        textStyle: {
+          color: heatColor(Math.pow(d.intensity, 0.75)),
+          fontSize: 14 + Math.round(40 * Math.pow(d.intensity, 0.75)),
+          fontWeight: d.intensity > 0.55 ? 800 : 600
+        }
+      }));
+      if (!window.echarts || typeof echarts.init !== 'function') {
+        box.innerHTML = '<div class="skill-pills" style="padding:24px;">' +
+          cloudData.map(d => `<span class="pill" style="font-size:${d.textStyle.fontSize}px;color:${d.textStyle.color};font-weight:${d.textStyle.fontWeight};">${esc(d.name)}</span>`).join('') +
+          '</div>';
+        return;
+      }
+      if (!heatChart) heatChart = echarts.init(box);
+      else box.innerHTML = '';
+      heatChart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          formatter(p) {
+            return `<b>${esc(p.name)}</b><br/>级别：${esc(p.data.level)}<br/>要求职位数：${p.value}<br/>${esc(p.data.evidence || '')}`;
+          }
+        },
+        series: [{
+          type: 'wordCloud',
+          shape: 'circle',
+          left: 'center', top: 'center', width: '92%', height: '88%',
+          sizeRange: [14, 54],
+          rotationRange: [-30, 30],
+          rotationStep: 15,
+          gridSize: 8,
+          drawOutOfBound: false,
+          layoutAnimation: true,
+          textStyle: {fontFamily: 'Segoe UI, Microsoft YaHei, sans-serif'},
+          emphasis: {textStyle: {textShadowBlur: 8, textShadowColor: '#99f6e4'}},
+          data: cloudData
+        }]
+      }, true);
+    }
+
+    function renderSkillTable(skills) {
+      $('skillCount').textContent = skills.length ? `${skills.length} 种技能` : '—';
+      if (!skills.length) {
+        $('skillBody').innerHTML = '<tr><td colspan="5"><div class="empty">暂无数据</div></td></tr>';
+        return;
+      }
+      const cls = {'核心必备':'core','常见必备':'common','低频必备':'low','加分项':'bonus'};
+      $('skillBody').innerHTML = skills.map(s => `
+        <tr>
+          <td><b>${esc(s.name)}</b></td>
+          <td><span class="badge ${cls[s.level] || 'low'}">${esc(s.level)}</span></td>
+          <td>${s.required_count} / ${s.job_count || 0}</td>
+          <td>${esc(s.category)}</td>
+          <td><div class="evidence" title="${esc(s.evidence)}">${esc((s.evidence || '').slice(0, 90))}${s.evidence && s.evidence.length > 90 ? '…' : ''}</div></td>
+        </tr>`).join('');
+    }
+
+    function renderLearningPath(path) {
+      if (!path || !path.length) {
+        $('learningPath').innerHTML = '<div class="empty">暂无数据</div>';
+        return;
+      }
+      $('learningPath').innerHTML = path.map(p => `
+        <div class="path-item">
+          <b>${p.index}. ${esc(p.name)}</b>
+          <div class="meta">${esc(p.level)} · ${esc(p.category)} · ${p.required_count} 个职位要求</div>
+          <div class="ev">${esc((p.evidence || '').slice(0, 110))}</div>
+        </div>`).join('');
+    }
+
+    function renderSuggestions(result) {
+      const matched = (result.matched_positions || []).slice(0, 8).map(p => p.name);
+      const suggested = (result.meta && result.meta.suggestions) || [];
+      const names = matched.length ? matched : suggested;
+      $('suggestions').innerHTML = names.length
+        ? names.map(name => `<span class="suggestion" data-name="${esc(name)}">${esc(name)}</span>`).join('')
+        : '';
+      $('suggestions').querySelectorAll('[data-name]').forEach(el => {
+        el.onclick = () => { $('positionInput').value = el.dataset.name; recommend(); };
+      });
+    }
+
+    async function recommend() {
+      const position = $('positionInput').value.trim();
+      if (!position) { toast('请输入职位名'); return; }
+      $('recommendBtn').disabled = true;
+      $('recommendBtn').textContent = '查询中…';
+      $('queryMsg').textContent = '正在按详情正文统计技能…';
+      try {
+        const result = await api('/api/skills/recommend', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({position})
+        });
+        latestResult = result;
+        renderHeatmap(result.heatmap);
+        renderSkillTable(result.skills || []);
+        renderLearningPath(result.learning_path);
+        renderSuggestions(result);
+        $('heatmapMeta').textContent = result.job_count
+          ? `${result.job_count} 个职位 · ${result.skills.length} 种技能`
+          : '未匹配到职位';
+        $('queryMsg').textContent = result.job_count
+          ? `已按「${position}」统计；技能频次越高，字体越大、颜色越深。`
+          : `未匹配到「${position}」，可尝试下方推荐职位。`;
+      } catch (e) {
+        $('queryMsg').textContent = '查询失败：' + e.message;
+        toast('查询失败：' + e.message, 'err');
+      } finally {
+        $('recommendBtn').disabled = false;
+        $('recommendBtn').textContent = '查看该职位技能';
+      }
+    }
+
+    async function rebuild() {
+      $('rebuildBtn').disabled = true;
+      $('queryMsg').textContent = '正在从详情正文重建技能索引…';
+      try {
+        const res = await api('/api/skills/rebuild', {method: 'POST'});
+        toast(`重建完成：扫描 ${res.details_scanned} 条详情，写入 ${res.rows_inserted} 条技能`, 'ok');
+        if ($('positionInput').value.trim()) await recommend();
+      } catch (e) {
+        toast('重建失败：' + e.message, 'err');
+      } finally {
+        $('rebuildBtn').disabled = false;
+      }
+    }
+
+    function renderUserSkills() {
+      $('userSkills').innerHTML = selectedSkills.size
+        ? [...selectedSkills].map(name => `<span class="pill on" data-remove="${esc(name)}">${esc(name)} ×</span>`).join('')
+        : '<span class="hint">尚未选择</span>';
+      $('userSkills').querySelectorAll('[data-remove]').forEach(el => {
+        el.onclick = () => toggleSkill(el.dataset.remove);
+      });
+      $('catalogSkills').innerHTML = (catalog.skills || []).map(s =>
+        `<span class="pill ${selectedSkills.has(s.name) ? 'on' : ''}" data-skill="${esc(s.name)}">${esc(s.name)}</span>`
+      ).join('');
+      $('catalogSkills').querySelectorAll('[data-skill]').forEach(el => {
+        el.onclick = () => toggleSkill(el.dataset.skill);
+      });
+    }
+
+    function toggleSkill(name) {
+      if (selectedSkills.has(name)) selectedSkills.delete(name);
+      else selectedSkills.add(name);
+      renderUserSkills();
+    }
+
+    function addSkill(raw) {
+      const value = String(raw || '').trim();
+      if (!value) return;
+      const lower = value.toLowerCase();
+      const hit = (catalog.skills || []).find(s =>
+        s.name.toLowerCase() === lower || (s.aliases || []).some(a => String(a).toLowerCase() === lower)
+      );
+      selectedSkills.add(hit ? hit.name : value);
+      renderUserSkills();
+    }
+
+    async function loadCatalog() {
+      try {
+        catalog = await api('/api/skills/catalog');
+        renderUserSkills();
+      } catch (e) {
+        $('catalogSkills').textContent = '词典加载失败：' + e.message;
+      }
+    }
+
+    async function match() {
+      const position = $('positionInput').value.trim();
+      if (!position) { toast('请先输入职位名'); return; }
+      $('matchBtn').disabled = true;
+      $('matchMsg').textContent = '计算中…';
+      try {
+        const res = await api('/api/skills/match', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({keyword: position, user_skills: [...selectedSkills]})
+        });
+        $('matchedBox').innerHTML = (res.matched_required || []).map(n => esc(n.name)).join('、') || '—';
+        $('missingBox').innerHTML = (res.missing_required || []).map(n => esc(n.name)).join('、') || '—';
+        $('matchMsg').textContent = `覆盖率 ${res.coverage}%`;
+      } catch (e) {
+        $('matchMsg').textContent = '匹配失败：' + e.message;
+      } finally {
+        $('matchBtn').disabled = false;
+      }
+    }
+
+    $('recommendBtn').onclick = recommend;
+    $('rebuildBtn').onclick = rebuild;
+    $('matchBtn').onclick = match;
+    $('positionInput').addEventListener('keydown', e => { if (e.key === 'Enter') recommend(); });
+    $('userSkillInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); addSkill(e.target.value); e.target.value = ''; }
+    });
+    window.addEventListener('resize', () => { if (heatChart) heatChart.resize(); });
+
+    loadCatalog();
+    if ($('positionInput').value.trim()) recommend();
+  </script>
+</body>
+</html>

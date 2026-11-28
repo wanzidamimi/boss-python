@@ -70,5 +70,35 @@ class SkillGraphTest(unittest.TestCase):
         self.assertEqual(result["source"], "job_details.post_description")
 
 
+class SkillRecommendTest(unittest.TestCase):
+    def rows(self):
+        return [
+            {**make_row(1, "Python", job_name="爬虫工程师"), "task_keyword": "爬虫"},
+            {**make_row(1, "Scrapy", job_name="爬虫工程师"), "task_keyword": "爬虫"},
+            {**make_row(2, "Python", job_name="爬虫工程师"), "task_keyword": "爬虫"},
+            {**make_row(2, "Kubernetes", "bonus", job_name="爬虫工程师",
+                         category="运维与云原生"), "task_keyword": "爬虫"},
+            make_row(3, "Java", job_name="Java开发工程师"),
+        ]
+
+    def test_recommend_skills_for_position(self):
+        with patch.object(skill_graph.db, "query_job_skills", return_value=self.rows()):
+            result = skill_graph.recommend_positions("爬虫工程师")
+        self.assertEqual(result["job_count"], 2)
+        skills = {s["name"]: s for s in result["skills"]}
+        self.assertEqual(skills["Python"]["required_count"], 2)
+        self.assertEqual(skills["Python"]["level"], "核心必备")
+        self.assertEqual(skills["Kubernetes"]["level"], "加分项")
+        self.assertEqual(result["heatmap"][0]["name"], "Python")
+        self.assertEqual(result["learning_path"][0]["name"], "Python")
+        self.assertNotIn("Java开发工程师", [p["name"] for p in result["matched_positions"]])
+
+    def test_recommend_empty_with_suggestions(self):
+        with patch.object(skill_graph.db, "query_job_skills", return_value=self.rows()):
+            result = skill_graph.recommend_positions("不存在的职位")
+        self.assertEqual(result["job_count"], 0)
+        self.assertIn("Java开发工程师", result["meta"]["suggestions"])
+
+
 if __name__ == "__main__":
     unittest.main()

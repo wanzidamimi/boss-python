@@ -892,7 +892,7 @@ def query_job_skills(keyword: str = "", task_id: str = "") -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT js.* FROM job_skills js "
+                "SELECT js.*, t.keyword AS task_keyword FROM job_skills js "
                 "LEFT JOIN tasks t ON t.task_id = js.task_id "
                 f"WHERE {' AND '.join(where)} "
                 "ORDER BY js.job_name, js.detail_id, js.skill_level, js.skill_name",

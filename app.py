@@ -66,6 +66,10 @@ class SkillMatchRequest(BaseModel):
     user_skills: list[str] = []
 
 
+class SkillRecommendRequest(BaseModel):
+    position: str = ""
+
+
 def log_line(log_path, message):
     """把一条带时间戳的记录追加到任务日志。"""
     if not log_path:
@@ -395,6 +399,11 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/skills")
+def skills_page():
+    return FileResponse(STATIC_DIR / "skills.html")
+
+
 @app.get("/api/cities")
 def cities():
     """返回 BOSS 城市中文名 -> 9 位编码码表，供前端城市选择使用。"""
@@ -408,6 +417,14 @@ def cities():
 # ---------------------------------------------------------------------------
 # 职位技能图谱 API（数据源：job_details.post_description）
 # ---------------------------------------------------------------------------
+@app.post("/api/skills/recommend")
+def api_skill_recommend(req: SkillRecommendRequest):
+    try:
+        return skill_graph.recommend_positions(req.position)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"skill recommend error: {exc}")
+
+
 @app.get("/api/skills/catalog")
 def api_skill_catalog():
     try:

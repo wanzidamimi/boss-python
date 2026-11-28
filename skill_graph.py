@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from itertools import combinations
 
@@ -68,7 +69,7 @@ def _aggregate(rows: list[dict]) -> dict:
             "matched_alias": row.get("matched_alias") or "",
         })
         item[level].add(detail_id)
-        if not item["evidence"] and row.get("evidence_sentence"):
+        if row.get("evidence_sentence") and (level == "required" or not item["evidence"]):
             item["evidence"] = row["evidence_sentence"]
         if not item["category"] and row.get("category"):
             item["category"] = row["category"]
@@ -220,4 +221,188 @@ def match_user(keyword: str = "", user_skills: list[str] | None = None) -> dict:
         ],
         "meta": graph["meta"],
         "positions": graph["positions"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 按职位名推荐技能：输入职位 -> 输出该职位应该会什么
+# ---------------------------------------------------------------------------
+_TITLE_NOISE_RE = re.compile(r"[\s\-_/\\()（）\[\]【】·、,，.。]+")
+
+
+def _normalize_title(value: str) -> str:
+    return _TITLE_NOISE_RE.sub("", str(value or "")).lower()
+
+
+def _bigram_similarity(left: str, right: str) -> float:
+    if len(left) < 2 or len(right) < 2:
+        return 0.0
+    a = {left[i:i + 2] for i in range(len(left) - 1)}
+    b = {right[i:i + 2] for i in range(len(right) - 1)}
+    union = a | b
+    return len(a & b) / len(union) if union else 0.0
+
+
+def _position_score(row: dict, position: str) -> float:
+    """职位名匹配得分：精确 > 包含 > 任务关键词 > 字符二元组模糊。"""
+    target = _normalize_title(position)
+    if not target:
+        return 0.0
+    name = _normalize_title(row.get("job_name"))
+    task = _normalize_title(row.get("task_keyword"))
+
+    if name and name == target:
+        return 1.0
+    if name and target in name:
+        return min(0.95, 0.85 + 0.1 * len(target) / len(name))
+    if name and len(name) >= 2 and name in target:
+        return 0.85
+    if task and task == target:
+        return 0.7
+    if task and target in task:
+        return 0.65
+    similarity = max(
+        _bigram_similarity(target, name),
+        _bigram_similarity(target, task) * 0.8,
+    )
+    return 0.6 * similarity if similarity >= 0.35 else 0.0
+
+
+def _empty_recommendation(position: str, rows: list[dict], compiled: dict) -> dict:
+    suggestions = Counter(row.get("job_name") or "(未命名职位)" for row in rows)
+    return {
+        "position": position,
+        "job_count": 0,
+        "matched_positions": [],
+        "required_skills": [],
+        "bonus_skills": [],
+        "skills": [],
+        "heatmap": [],
+        "learning_path": [],
+        "meta": {
+            "catalog_version": compiled["version"],
+            "source": "job_details.post_description",
+            "note": "未匹配到该职位，请换一个更接近职位名称的关键词。",
+            "suggestions": [name for name, _ in suggestions.most_common(10)],
+        },
+    }
+
+
+def recommend_positions(position: str = "") -> dict:
+    """输入职位名，输出该职位应该具备的技能画像和学习顺序。"""
+    position = str(position or "").strip()
+    compiled = skill_extractor.get_compiled_catalog()
+    rows = db.query_job_skills()
+    if not position:
+        return _empty_recommendation(position, rows, compiled)
+
+    scored_details: dict[int, dict] = {}
+    for row in rows:
+        score = _position_score(row, position)
+        if score < 0.6:
+            continue
+        detail_id = int(row["detail_id"])
+        current = scored_details.setdefault(detail_id, {"score": score, "rows": []})
+        current["score"] = max(current["score"], score)
+        current["rows"].append(row)
+
+    selected_rows = [row for item in scored_details.values() for row in item["rows"]]
+    if not selected_rows:
+        return _empty_recommendation(position, rows, compiled)
+
+    aggregated = _aggregate(selected_rows)
+    stats: dict[str, dict] = aggregated["stats"]
+    job_meta: dict[int, dict] = aggregated["job_meta"]
+    job_count = len(job_meta)
+    order = {s["name"]: s["roadmap_order"] for s in compiled["skills"]}
+
+    skills = []
+    for name, item in stats.items():
+        required_count = len(item["required"])
+        bonus_count = len(item["bonus"])
+        required_ratio = round(required_count / job_count, 3) if job_count else 0.0
+        bonus_ratio = round(bonus_count / job_count, 3) if job_count else 0.0
+        if required_ratio >= 0.5:
+            level = "核心必备"
+        elif required_ratio >= 0.25:
+            level = "常见必备"
+        elif required_count:
+            level = "低频必备"
+        else:
+            level = "加分项"
+        skills.append({
+            "name": name,
+            "category": item["category"],
+            "level": level,
+            "required_count": required_count,
+            "bonus_count": bonus_count,
+            "job_count": len(item["required"] | item["bonus"]),
+            "required_ratio": required_ratio,
+            "bonus_ratio": bonus_ratio,
+            "importance_score": round(required_ratio * 100 + bonus_ratio * 20, 1),
+            "roadmap_order": order.get(name, 999),
+            "evidence": item["evidence"],
+            "matched_alias": item["matched_alias"],
+        })
+
+    skills.sort(key=lambda s: (-s["importance_score"], -s["required_count"], s["name"]))
+    max_required = max([s["required_count"] for s in skills] + [1])
+    heatmap = [
+        {
+            "name": s["name"],
+            "value": s["required_count"],
+            "ratio": s["required_ratio"],
+            "intensity": round(s["required_count"] / max_required, 3),
+            "level": s["level"],
+            "category": s["category"],
+            "evidence": s["evidence"],
+        }
+        for s in skills
+    ]
+
+    def learning_key(skill: dict):
+        generic = skill["category"] in ("通用能力", "管理职能")
+        return (
+            skill["level"] == "加分项",
+            generic,
+            skill["roadmap_order"],
+            -skill["importance_score"],
+            skill["name"],
+        )
+
+    learning_path = [
+        {
+            "index": idx,
+            "name": s["name"],
+            "category": s["category"],
+            "level": s["level"],
+            "required_count": s["required_count"],
+            "required_ratio": s["required_ratio"],
+            "evidence": s["evidence"],
+        }
+        for idx, s in enumerate(sorted(skills, key=learning_key), start=1)
+    ]
+
+    positions = Counter(
+        meta["job_name"] or "(未命名职位)" for meta in job_meta.values()
+    )
+    return {
+        "position": position,
+        "job_count": job_count,
+        "matched_positions": [
+            {"name": name, "job_count": count}
+            for name, count in sorted(positions.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
+        "required_skills": [s for s in skills if s["required_count"] > 0],
+        "bonus_skills": [s for s in skills if s["required_count"] == 0 and s["bonus_count"] > 0],
+        "skills": skills,
+        "heatmap": heatmap,
+        "learning_path": learning_path,
+        "meta": {
+            "catalog_version": compiled["version"],
+            "source": "job_details.post_description",
+            "job_count": job_count,
+            "skill_count": len(skills),
+            "note": "按详情正文统计；每个职位命中同一技能只计一次。字体越大、颜色越深表示该职位技能要求中出现得越多。",
+        },
     }
