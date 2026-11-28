@@ -44,6 +44,8 @@
     .columns { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(300px,1fr); gap:20px; }
     table { width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
     th { position:sticky; top:0; background:#f8fafc; color:var(--muted); text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); font-size:12px; }
+    .help { display:inline-flex; width:15px; height:15px; margin-left:5px; border-radius:50%; background:#e2e8f0; color:#64748b; align-items:center; justify-content:center; font-size:11px; font-weight:700; cursor:help; vertical-align:middle; }
+    .help:hover { background:#0f766e; color:#fff; }
     td { padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
     .table-wrap { max-height:520px; overflow:auto; border:1px solid var(--line); border-radius:12px; }
     .badge { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
@@ -111,7 +113,7 @@
         <div class="card-head"><h2>技能清单</h2><span class="sub" id="skillCount">—</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>技能</th><th>要求级别</th><th>出现职位</th><th>分类</th><th>原文依据</th></tr></thead>
+            <thead><tr><th>技能</th><th>要求级别</th><th>出现职位<span class="help" title="必备职位数 / 命中职位数&#10;左边：有多少匹配职位把该技能写成必备要求。&#10;右边：有多少匹配职位正文里提到该技能，包含必备和加分；同一职位只算一次。&#10;例如 6 / 8：8 个职位提到该技能，其中 6 个是必备，2 个是加分。&#10;例如 0 / 3：3 个职位都只是加分项。&#10;例如 15 / 15：15 个职位都把它作为必备要求。">?</span></th><th>分类</th><th>原文依据</th></tr></thead>
             <tbody id="skillBody"><tr><td colspan="5"><div class="empty">暂无数据</div></td></tr></tbody>
           </table>
         </div>
