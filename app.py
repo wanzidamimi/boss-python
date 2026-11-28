@@ -70,6 +70,19 @@ class SkillRecommendRequest(BaseModel):
     position: str = ""
 
 
+class CandidateReviewRequest(BaseModel):
+    ids: list[int] = []
+    limit: int = 20
+    auto_apply: bool = False
+
+
+class CandidateApproveRequest(BaseModel):
+    name: str = ""
+    aliases: list[str] = []
+    category: str = ""
+    roadmap_order: float = 999
+
+
 def log_line(log_path, message):
     """把一条带时间戳的记录追加到任务日志。"""
     if not log_path:
@@ -387,11 +400,24 @@ def worker():
             task_queue.task_done()
 
 
+def _startup_candidate_mining():
+    """每次项目启动时执行一次候选技能挖掘，失败不影响主服务。"""
+    try:
+        result = skill_graph.mine_candidates()
+        print(
+            "[skills] startup candidate mining: "
+            f"details={result['details_scanned']} kept={result['candidates_kept']}"
+        )
+    except Exception as exc:
+        print(f"[skills] startup candidate mining failed: {exc}")
+
+
 @app.on_event("startup")
 def startup_event():
     db.init_db()
     progress_store.cleanup_progress(7)
     threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_startup_candidate_mining, daemon=True).start()
 
 
 @app.get("/")
@@ -402,6 +428,11 @@ def index():
 @app.get("/skills")
 def skills_page():
     return FileResponse(STATIC_DIR / "skills.html")
+
+
+@app.get("/candidates")
+def candidates_page():
+    return FileResponse(STATIC_DIR / "candidates.html")
 
 
 @app.get("/api/cities")
@@ -459,6 +490,70 @@ def api_skill_rebuild():
         return skill_graph.rebuild_skill_index()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"skill rebuild error: {exc}")
+
+
+@app.get("/api/skills/candidates")
+def api_list_candidates(status: str = "", limit: int = 200):
+    try:
+        return {
+            "items": skill_graph.list_candidates(status, min(limit, 500)),
+            "llm": skill_graph.llm_status(),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"candidate list error: {exc}")
+
+
+@app.post("/api/skills/candidates/mine")
+def api_mine_candidates():
+    try:
+        return skill_graph.mine_candidates()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"candidate mine error: {exc}")
+
+
+@app.post("/api/skills/candidates/review")
+def api_review_candidates(req: CandidateReviewRequest):
+    try:
+        return skill_graph.review_candidates_with_llm(
+            req.ids or None, limit=req.limit, auto_apply=req.auto_apply
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"candidate review error: {exc}")
+
+
+@app.post("/api/skills/candidates/apply")
+def api_apply_llm_suggestions(req: CandidateReviewRequest):
+    try:
+        return skill_graph.apply_llm_suggestions(req.ids or None)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"candidate apply error: {exc}")
+
+
+@app.post("/api/skills/candidates/{candidate_id}/approve")
+def api_approve_candidate(candidate_id: int, req: CandidateApproveRequest):
+    try:
+        return skill_graph.approve_candidate(
+            candidate_id,
+            name=req.name,
+            aliases=req.aliases,
+            category=req.category,
+            roadmap_order=req.roadmap_order,
+            source="manual",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"candidate approve error: {exc}")
+
+
+@app.post("/api/skills/candidates/{candidate_id}/reject")
+def api_reject_candidate(candidate_id: int):
+    try:
+        return skill_graph.reject_candidate(candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"candidate reject error: {exc}")
 
 
 # ---------------------------------------------------------------------------

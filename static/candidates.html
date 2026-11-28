@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>候选技能池</title>
+  <style>
+    :root { --brand:#0f766e; --brand2:#14b8a6; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#eef2f7; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); }
+    .topnav { background:#0f172a; display:flex; align-items:center; gap:8px; padding:0 24px; height:54px; color:#fff; }
+    .topnav .mark { width:30px; height:30px; border-radius:9px; background:linear-gradient(135deg,#14b8a6,#0f766e); display:grid; place-items:center; font-weight:800; margin-right:8px; }
+    .topnav a { color:#cbd5e1; text-decoration:none; padding:8px 15px; border-radius:9px; font-size:13.5px; font-weight:600; }
+    .topnav a:hover { background:rgba(255,255,255,.08); color:#fff; }
+    .topnav a.active { background:rgba(20,184,166,.18); color:#5eead4; }
+    .hero { background:linear-gradient(120deg,#0f766e,#0d9488 48%,#14b8a6); color:#fff; padding:28px 0 62px; }
+    .wrap { max-width:1220px; margin:0 auto; padding:0 24px; }
+    .hero h1 { margin:0; font-size:25px; } .hero p { margin:6px 0 0; font-size:13.5px; opacity:.92; }
+    main { max-width:1220px; margin:-44px auto 40px; padding:0 24px; }
+    .card { background:#fff; border:1px solid rgba(226,232,240,.9); border-radius:16px; box-shadow:0 10px 30px rgba(15,23,42,.07); padding:22px 24px; margin-bottom:20px; }
+    .card-head { display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px; }
+    .card-head h2 { margin:0; font-size:16.5px; display:flex; align-items:center; gap:9px; }
+    .card-head h2::before { content:""; width:4px; height:17px; border-radius:3px; background:linear-gradient(var(--brand2),var(--brand)); }
+    .actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    button { border:none; border-radius:10px; padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+    .primary { background:linear-gradient(135deg,var(--brand2),var(--brand)); color:#fff; }
+    .secondary { background:#f1f5f9; color:#475569; }
+    .danger { background:#fee2e2; color:#b91c1c; }
+    .muted, .hint { color:var(--muted); font-size:12.5px; }
+    .table-wrap { overflow:auto; max-height:620px; border:1px solid var(--line); border-radius:12px; }
+    table { width:100%; border-collapse:separate; border-spacing:0; font-size:12.5px; }
+    th { position:sticky; top:0; background:#f8fafc; text-align:left; color:var(--muted); padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+    td { padding:9px 10px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+    input { width:100%; min-width:110px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; background:#fbfdff; }
+    .evidence { max-width:330px; min-width:240px; white-space:normal; line-height:1.55; color:#475569; }
+    .suggestion { max-width:260px; min-width:220px; white-space:normal; line-height:1.5; color:#475569; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+    .pending { background:#fef3c7; color:#92400e; } .approved { background:#d1fae5; color:#047857; }
+    .rejected { background:#fee2e2; color:#b91c1c; } .suggested { background:#ede9fe; color:#6d28d9; }
+    .toast-wrap { position:fixed; right:22px; bottom:22px; z-index:99; display:flex; flex-direction:column; gap:10px; }
+    .toast { background:#0f172a; color:#fff; padding:12px 16px; border-radius:11px; font-size:13.5px; }
+    .toast.ok { background:linear-gradient(135deg,#059669,#10b981); }
+    .toast.err { background:linear-gradient(135deg,#dc2626,#ef4444); }
+    .empty { padding:34px; text-align:center; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <nav class="topnav">
+    <div class="mark">B</div>
+    <a href="/">数据采集</a>
+    <a href="/skills">职位技能图谱</a>
+    <a href="/candidates" class="active">候选技能池</a>
+  </nav>
+  <header class="hero">
+    <div class="wrap">
+      <h1>候选技能池</h1>
+      <p>从详情正文中发现词典未收录的技能候选，人工确认或借助 LLM 判断后加入正式技能池</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="card-head">
+        <h2>候选技能管理</h2>
+        <span class="sub" id="llmStatus">LLM 状态加载中…</span>
+      </div>
+      <div class="actions">
+        <button class="secondary" id="mineBtn">重新挖掘候选</button>
+        <button class="primary" id="reviewBtn">LLM 判断选中</button>
+        <button class="primary" id="applyBtn">应用 LLM 建议</button>
+        <span class="muted" id="msg">候选池在每次项目启动时会自动挖掘一次。</span>
+      </div>
+      <div class="hint">勾选多行后可批量 LLM 判断或批量应用建议；未勾选时处理全部待审候选。</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>候选列表</h2>
+        <span class="sub" id="count">—</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>选择</th><th>候选词</th><th>命中职位</th><th>状态</th><th>证据句</th>
+              <th>LLM 建议</th><th>标准名称</th><th>分类</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="candidateBody"><tr><td colspan="9"><div class="empty">加载中…</div></td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast-wrap" id="toasts"></div>
+
+  <script>
+    function $(id) { return document.getElementById(id); }
+    function esc(v) { if (v == null) return ''; return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function toast(text, kind) { const el=document.createElement('div'); el.className='toast '+(kind||''); el.textContent=text; $('toasts').appendChild(el); setTimeout(()=>el.remove(),4200); }
+    async function api(url, options) { const res=await fetch(url, options); if(!res.ok) throw new Error((await res.text()).slice(0,300)); return res.json(); }
+    function selectedIds() { return [...document.querySelectorAll('.candidate-check:checked')].map(el => Number(el.value)); }
+    function suggestionText(s) {
+      if (!s) return '—';
+      if (s.error) return '错误：' + esc(s.error);
+      if (s.is_skill) return `建议加入：${esc(s.canonical_name || '')}｜${esc(s.category || '')}｜置信度 ${s.confidence}`;
+      return '不建议：' + esc(s.reason || '不是技能');
+    }
+    function render(rows) {
+      $('count').textContent = rows.length ? `${rows.length} 条候选` : '暂无候选';
+      if (!rows.length) { $('candidateBody').innerHTML='<tr><td colspan="9"><div class="empty">暂无候选技能</div></td></tr>'; return; }
+      $('candidateBody').innerHTML = rows.map(r => {
+        const s = r.llm_suggestion;
+        const name = s && s.canonical_name ? s.canonical_name : r.raw_mention;
+        const cat = s && s.category ? s.category : '';
+        const statusCls = ['pending','approved','rejected'].includes(r.status) ? r.status : 'pending';
+        return `<tr>
+          <td><input type="checkbox" class="candidate-check" value="${r.id}" style="width:auto;min-width:auto;" /></td>
+          <td><b>${esc(r.raw_mention)}</b><div class="hint">${esc(r.normalized_key)}</div></td>
+          <td>${r.hit_count}</td>
+          <td><span class="badge ${statusCls}">${esc(r.status)}</span><div class="hint">${esc(r.llm_status || '')}</div></td>
+          <td class="evidence">${esc(r.evidence_sentence || '')}</td>
+          <td class="suggestion">${suggestionText(s)}</td>
+          <td><input data-name="${r.id}" value="${esc(name)}" /></td>
+          <td><input data-cat="${r.id}" value="${esc(cat)}" placeholder="待分类" /></td>
+          <td>
+            <button class="primary mini" onclick="approve(${r.id})">加入词典</button>
+            <button class="danger mini" onclick="reject(${r.id})">忽略</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+    async function load() {
+      try {
+        const data = await api('/api/skills/candidates?limit=500');
+        render(data.items || []);
+        const llm = data.llm || {};
+        $('llmStatus').textContent = llm.configured
+          ? `LLM 已配置：${llm.model}`
+          : 'LLM 未配置，可人工确认；配置 BOSS_LLM_BASE_URL / BOSS_LLM_API_KEY 后可启用';
+      } catch (e) { toast('加载候选失败：'+e.message,'err'); }
+    }
+    async function approve(id) {
+      const name = document.querySelector(`[data-name="${id}"]`).value.trim();
+      const category = document.querySelector(`[data-cat="${id}"]`).value.trim();
+      try {
+        const res = await api(`/api/skills/candidates/${id}/approve`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({name, category})
+        });
+        toast(res.added ? `已加入正式技能池：${res.name}` : `正式池已存在：${res.name}`, 'ok');
+        await load();
+      } catch(e) { toast('加入失败：'+e.message,'err'); }
+    }
+    async function reject(id) {
+      try { await api(`/api/skills/candidates/${id}/reject`, {method:'POST'}); await load(); }
+      catch(e) { toast('忽略失败：'+e.message,'err'); }
+    }
+    $('mineBtn').onclick = async () => {
+      $('mineBtn').disabled=true; $('msg').textContent='正在挖掘候选…';
+      try { const res=await api('/api/skills/candidates/mine',{method:'POST'}); toast(`挖掘完成：保留 ${res.candidates_kept} 条`,'ok'); await load(); }
+      catch(e) { toast('挖掘失败：'+e.message,'err'); }
+      finally { $('mineBtn').disabled=false; $('msg').textContent='候选池在每次项目启动时会自动挖掘一次。'; }
+    };
+    $('reviewBtn').onclick = async () => {
+      $('reviewBtn').disabled=true; $('msg').textContent='LLM 判断中…';
+      try {
+        const res=await api('/api/skills/candidates/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:selectedIds(),limit:20,auto_apply:false})});
+        toast(`LLM 判断完成：${res.reviewed} 条，错误 ${res.errors||0} 条`,'ok'); await load();
+      } catch(e) { toast('LLM 判断失败：'+e.message,'err'); }
+      finally { $('reviewBtn').disabled=false; $('msg').textContent=''; }
+    };
+    $('applyBtn').onclick = async () => {
+      $('applyBtn').disabled=true; $('msg').textContent='应用 LLM 建议中…';
+      try {
+        const res=await api('/api/skills/candidates/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:selectedIds()})});
+        toast(`已应用 ${res.applied} 条`,'ok'); await load();
+      } catch(e) { toast('应用失败：'+e.message,'err'); }
+      finally { $('applyBtn').disabled=false; $('msg').textContent=''; }
+    };
+    load();
+  </script>
+</body>
+</html>

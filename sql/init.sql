@@ -200,6 +200,53 @@ CREATE TABLE IF NOT EXISTS job_skills (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='职位详情正文抽取的技能';
 
+-- ------------------------------------------------------------
+-- 正式技能池: 运行时唯一词典来源, JSON 仅作为一次性迁移种子
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS skill_catalog (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  name          VARCHAR(128) NOT NULL                  COMMENT '标准技能名',
+  aliases_json  TEXT NOT NULL                          COMMENT '别名 JSON 数组',
+  category      VARCHAR(64)  NOT NULL DEFAULT ''       COMMENT '技能分类',
+  roadmap_order FLOAT        NOT NULL DEFAULT 999      COMMENT '学习顺序权重, 越小越靠前',
+  enabled       TINYINT(1)   NOT NULL DEFAULT 1        COMMENT '是否启用',
+  version       VARCHAR(64)  NOT NULL DEFAULT ''       COMMENT '词典版本',
+  source        VARCHAR(32)  NOT NULL DEFAULT 'seed'   COMMENT 'seed/manual/llm',
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_skill_catalog_name (name),
+  KEY idx_skill_catalog_category (category)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='正式技能池';
+
+CREATE TABLE IF NOT EXISTS skill_catalog_meta (
+  meta_key   VARCHAR(64)  NOT NULL,
+  meta_value VARCHAR(500) NOT NULL DEFAULT '',
+  updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (meta_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='正式技能池元数据';
+
+CREATE TABLE IF NOT EXISTS skill_candidates (
+  id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  raw_mention         VARCHAR(128) NOT NULL                COMMENT 'JD 中的原始候选词',
+  normalized_key      VARCHAR(128) NOT NULL                COMMENT '归一化 key',
+  hit_count           INT          NOT NULL DEFAULT 0      COMMENT '命中职位数',
+  evidence_sentence   TEXT NULL                            COMMENT '证据句',
+  status              VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+  llm_status          VARCHAR(16)  NOT NULL DEFAULT 'none' COMMENT 'none/suggested/error',
+  llm_suggestion_json TEXT NULL                            COMMENT 'LLM 结构化建议',
+  source              VARCHAR(32)  NOT NULL DEFAULT 'rule',
+  created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_skill_candidate_key (normalized_key),
+  KEY idx_skill_candidate_status (status),
+  KEY idx_skill_candidate_hits (hit_count)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='候选技能池';
+
 CREATE TABLE IF NOT EXISTS health_checks (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '自增主键',
   probe_at      DATETIME     NOT NULL                COMMENT '探测时间',

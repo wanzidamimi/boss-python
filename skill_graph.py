@@ -4,11 +4,13 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter, defaultdict
 from itertools import combinations
 
 import db
+import llm_reviewer
 import skill_extractor
 
 MAX_SKILLS_PER_JOB = 20
@@ -406,3 +408,205 @@ def recommend_positions(position: str = "") -> dict:
             "note": "按详情正文统计；每个职位命中同一技能只计一次。字体越大、颜色越深表示该职位技能要求中出现得越多。",
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# 候选技能池
+# ---------------------------------------------------------------------------
+def mine_candidates(min_hits: int = 2, max_rows: int = 200) -> dict:
+    """扫描详情正文中未命中正式词典的片段，重建 pending 候选池。"""
+    details = db.list_latest_details_with_description()
+    collected: dict[str, dict] = {}
+
+    for detail in details:
+        for candidate in skill_extractor.extract_candidates(detail["post_description"]):
+            key = candidate["normalized_key"]
+            item = collected.setdefault(key, {
+                "raw_mention": candidate["raw_mention"],
+                "normalized_key": key,
+                "hit_count": 0,
+                "evidence_sentence": candidate["evidence_sentence"],
+                "status": "pending",
+                "llm_status": "none",
+                "source": "rule",
+            })
+            item["hit_count"] += 1
+            if len(candidate["raw_mention"]) > len(item["raw_mention"]):
+                item["raw_mention"] = candidate["raw_mention"]
+
+    rows = [row for row in collected.values() if row["hit_count"] >= max(1, min_hits)]
+    rows.sort(key=lambda row: (-row["hit_count"], -len(row["normalized_key"]), row["normalized_key"]))
+
+    # 去掉被更长、更高频候选包含的短片段，例如“向量”被“向量数据库”包含
+    kept: list[dict] = []
+    for row in rows[:max_rows * 3]:
+        key = row["normalized_key"]
+        if any(key != other["normalized_key"] and key in other["normalized_key"]
+               and row["hit_count"] <= other["hit_count"] for other in kept):
+            continue
+        kept.append(row)
+        if len(kept) >= max_rows:
+            break
+
+    db.reset_pending_skill_candidates()
+    db.upsert_skill_candidates(kept)
+    return {
+        "details_scanned": len(details),
+        "raw_candidates": len(collected),
+        "candidates_kept": len(kept),
+        "min_hits": min_hits,
+        "source": "job_details.post_description",
+    }
+
+
+def list_candidates(status: str = "", limit: int = 200) -> list[dict]:
+    rows = db.list_skill_candidates(status=status, limit=limit)
+    for row in rows:
+        try:
+            row["llm_suggestion"] = json.loads(row.get("llm_suggestion_json") or "null")
+        except (TypeError, ValueError):
+            row["llm_suggestion"] = None
+    return rows
+
+
+def approve_candidate(candidate_id: int, name: str = "", aliases: list[str] | None = None,
+                      category: str = "", roadmap_order: float = 999,
+                      source: str = "manual") -> dict:
+    """把候选技能确认进正式技能池。"""
+    row = db.get_skill_candidate(candidate_id)
+    if not row:
+        raise ValueError("候选不存在")
+
+    suggestion = None
+    if row.get("llm_suggestion_json"):
+        try:
+            suggestion = json.loads(row["llm_suggestion_json"])
+        except (TypeError, ValueError):
+            suggestion = None
+
+    final_name = str(name or "").strip()
+    if not final_name and suggestion:
+        final_name = str(suggestion.get("canonical_name") or "").strip()
+    final_name = final_name or row["raw_mention"]
+
+    final_category = str(category or "").strip()
+    if not final_category and suggestion:
+        final_category = str(suggestion.get("category") or "").strip()
+    final_category = final_category or "待分类"
+
+    final_aliases = list(aliases or [])
+    if not final_aliases:
+        final_aliases = [row["raw_mention"], row["normalized_key"]]
+        if suggestion and suggestion.get("canonical_name"):
+            final_aliases.append(str(suggestion["canonical_name"]))
+
+    if suggestion and not roadmap_order:
+        try:
+            roadmap_order = float(suggestion.get("roadmap_order", 999))
+        except (TypeError, ValueError):
+            roadmap_order = 999
+
+    added = db.add_skill_catalog_item(
+        final_name, final_aliases, final_category, roadmap_order, source
+    )
+    db.update_skill_candidate(candidate_id, status="approved")
+    return {
+        "candidate_id": candidate_id,
+        "added": added,
+        "name": final_name,
+        "category": final_category,
+        "aliases": final_aliases,
+        "source": source,
+    }
+
+
+def reject_candidate(candidate_id: int) -> dict:
+    if not db.get_skill_candidate(candidate_id):
+        raise ValueError("候选不存在")
+    db.update_skill_candidate(candidate_id, status="rejected")
+    return {"candidate_id": candidate_id, "status": "rejected"}
+
+
+def review_candidates_with_llm(ids: list[int] | None = None, limit: int = 20,
+                               auto_apply: bool = False) -> dict:
+    """用 LLM 判断候选是否为技能；默认只生成建议，不自动加入正式池。"""
+    rows = db.list_skill_candidates(status="pending", limit=500)
+    if ids:
+        id_set = {int(x) for x in ids}
+        rows = [row for row in rows if int(row["id"]) in id_set]
+    rows = rows[:max(1, limit)]
+
+    if not rows:
+        return {"reviewed": 0, "applied": 0, "errors": 0}
+
+    try:
+        suggestions = llm_reviewer.review_candidates(rows)
+    except Exception as exc:
+        for row in rows:
+            db.update_skill_candidate(
+                row["id"], llm_status="error",
+                llm_suggestion_json=json.dumps({"error": str(exc)[:500]}, ensure_ascii=False),
+            )
+        return {"reviewed": 0, "applied": 0, "errors": len(rows), "error": str(exc)[:500]}
+
+    by_id = {int(item.get("id")): item for item in suggestions}
+    applied = 0
+    errors = 0
+    for row in rows:
+        suggestion = by_id.get(int(row["id"]))
+        if not suggestion:
+            errors += 1
+            db.update_skill_candidate(row["id"], llm_status="error")
+            continue
+        db.update_skill_candidate(
+            row["id"], llm_status="suggested",
+            llm_suggestion_json=json.dumps(suggestion, ensure_ascii=False),
+        )
+        if auto_apply and suggestion.get("is_skill") and float(suggestion.get("confidence", 0)) >= 0.75:
+            approve_candidate(
+                row["id"],
+                name=str(suggestion.get("canonical_name") or ""),
+                category=str(suggestion.get("category") or ""),
+                roadmap_order=float(suggestion.get("roadmap_order", 999)),
+                source="llm",
+            )
+            applied += 1
+
+    return {"reviewed": len(rows), "applied": applied, "errors": errors}
+
+
+def apply_llm_suggestions(ids: list[int] | None = None, min_confidence: float = 0.75) -> dict:
+    """将 LLM 建议中高置信度且判定为技能的项目加入正式池。"""
+    rows = db.list_skill_candidates(status="pending", limit=500)
+    rows = [row for row in rows if row.get("llm_status") == "suggested"]
+    if ids:
+        id_set = {int(x) for x in ids}
+        rows = [row for row in rows if int(row["id"]) in id_set]
+
+    applied = 0
+    for row in rows:
+        try:
+            suggestion = json.loads(row.get("llm_suggestion_json") or "null")
+        except (TypeError, ValueError):
+            suggestion = None
+        if not suggestion or not suggestion.get("is_skill"):
+            continue
+        try:
+            confidence = float(suggestion.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence < min_confidence:
+            continue
+        approve_candidate(
+            row["id"],
+            name=str(suggestion.get("canonical_name") or ""),
+            category=str(suggestion.get("category") or ""),
+            roadmap_order=float(suggestion.get("roadmap_order", 999)),
+            source="llm",
+        )
+        applied += 1
+    return {"applied": applied, "reviewed": len(rows)}
+
+
+def llm_status() -> dict:
+    return llm_reviewer.config_status()

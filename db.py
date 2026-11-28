@@ -1,6 +1,8 @@
+import json
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pymysql
 from pymysql.cursors import DictCursor
@@ -156,6 +158,56 @@ CREATE TABLE IF NOT EXISTS job_skills (
   COMMENT='职位详情正文抽取出的技能; 只用 post_description, 不用 jobs.skills'
 """
 
+SKILL_CATALOG_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS skill_catalog (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name          VARCHAR(128) NOT NULL COMMENT '标准技能名',
+  aliases_json  TEXT NOT NULL COMMENT '别名 JSON 数组',
+  category      VARCHAR(64) NOT NULL DEFAULT '',
+  roadmap_order FLOAT NOT NULL DEFAULT 999 COMMENT '学习顺序权重, 越小越靠前',
+  enabled       TINYINT(1) NOT NULL DEFAULT 1,
+  version       VARCHAR(64) NOT NULL DEFAULT '',
+  source        VARCHAR(32) NOT NULL DEFAULT 'seed' COMMENT 'seed/manual/llm',
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_skill_catalog_name (name),
+  KEY idx_skill_catalog_category (category)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='正式技能池; 运行时唯一词典来源'
+"""
+
+SKILL_CANDIDATE_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS skill_candidates (
+  id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  raw_mention         VARCHAR(128) NOT NULL COMMENT 'JD 中发现的原始候选词',
+  normalized_key      VARCHAR(128) NOT NULL COMMENT '归一化 key, 用于去重',
+  hit_count           INT NOT NULL DEFAULT 0 COMMENT '命中职位数',
+  evidence_sentence   TEXT NULL COMMENT '证据句',
+  status              VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+  llm_status          VARCHAR(16) NOT NULL DEFAULT 'none' COMMENT 'none/suggested/error',
+  llm_suggestion_json TEXT NULL COMMENT 'LLM 结构化建议',
+  source              VARCHAR(32) NOT NULL DEFAULT 'rule',
+  created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_skill_candidate_key (normalized_key),
+  KEY idx_skill_candidate_status (status),
+  KEY idx_skill_candidate_hits (hit_count)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='候选技能池; 未命中正式词典的 JD 片段'
+"""
+
+SKILL_META_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS skill_catalog_meta (
+  meta_key   VARCHAR(64) NOT NULL,
+  meta_value VARCHAR(500) NOT NULL DEFAULT '',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (meta_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='正式技能池元数据: version/description'
+"""
+
 DETAIL_COLUMNS = (
     "content_hash", "job_name", "position_name", "salary_desc",
     "experience_name", "degree_name", "location_name", "address",
@@ -203,6 +255,54 @@ def _add_index(cur, table: str, index: str, columns: str) -> None:
         cur.execute(f"ALTER TABLE {table} ADD INDEX {index} ({columns})")
 
 
+def _seed_skill_catalog_from_json(cur) -> None:
+    """一次性把旧 JSON 词典迁移到 MySQL；JSON 之后不再参与运行时读取。"""
+    path = Path(__file__).resolve().parent / "static" / "skill_catalog.json"
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or not isinstance(data.get("skills"), list):
+        return
+
+    cur.execute("SELECT COUNT(*) AS c FROM skill_catalog")
+    if cur.fetchone()["c"] > 0:
+        return
+
+    version = str(data.get("version", "unknown"))
+    for item in data["skills"]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        aliases = [str(x).strip() for x in ([name] + list(item.get("aliases", []))) if str(x).strip()]
+        cur.execute(
+            "INSERT IGNORE INTO skill_catalog "
+            "(name, aliases_json, category, roadmap_order, enabled, version, source) "
+            "VALUES (%s, %s, %s, %s, 1, %s, 'seed')",
+            (
+                name,
+                json.dumps(aliases, ensure_ascii=False),
+                str(item.get("category", "")),
+                float(item.get("roadmap_order", 999)),
+                version,
+            ),
+        )
+
+    for key, value in (
+        ("version", version),
+        ("description", str(data.get("description", ""))),
+    ):
+        cur.execute(
+            "INSERT INTO skill_catalog_meta (meta_key, meta_value) VALUES (%s, %s) "
+            "ON DUPLICATE KEY UPDATE meta_value=VALUES(meta_value)",
+            (key, value),
+        )
+
+
 def _ensure_schema(cur):
     """对已存在的旧库做幂等升级：缺表建表、缺列补列。"""
     cur.execute("CREATE TABLE IF NOT EXISTS accounts ("
@@ -220,6 +320,10 @@ def _ensure_schema(cur):
     cur.execute(DETAIL_TABLE_DDL)
     cur.execute(DETAIL_REQUEST_DDL)
     cur.execute(JOB_SKILL_TABLE_DDL)
+    cur.execute(SKILL_CATALOG_TABLE_DDL)
+    cur.execute(SKILL_CANDIDATE_TABLE_DDL)
+    cur.execute(SKILL_META_TABLE_DDL)
+    _seed_skill_catalog_from_json(cur)
 
     _add_column(cur, "accounts", "detail_blocked_until",
                 "detail_blocked_until DATETIME NULL COMMENT '详情风控冷却截止时间'")
@@ -899,4 +1003,136 @@ def query_job_skills(keyword: str = "", task_id: str = "") -> list[dict]:
                 tuple(params),
             )
             return cur.fetchall()
+
+
+# ---------------------------------------------------------------------------
+# 正式技能池与候选池
+# ---------------------------------------------------------------------------
+def list_skill_catalog(enabled_only: bool = True) -> list[dict]:
+    where = "WHERE enabled=1" if enabled_only else ""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, aliases_json, category, roadmap_order, enabled, "
+                "version, source, created_at, updated_at "
+                f"FROM skill_catalog {where} ORDER BY roadmap_order, name"
+            )
+            return cur.fetchall()
+
+
+def get_skill_catalog_meta() -> dict[str, str]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT meta_key, meta_value FROM skill_catalog_meta")
+            return {row["meta_key"]: row["meta_value"] for row in cur.fetchall()}
+
+
+def set_skill_catalog_meta(key: str, value: str) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO skill_catalog_meta (meta_key, meta_value) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE meta_value=VALUES(meta_value)",
+                (key, str(value)),
+            )
+
+
+def add_skill_catalog_item(name: str, aliases: list[str] | None, category: str,
+                           roadmap_order: float = 999, source: str = "manual") -> bool:
+    """新增正式技能；已存在同名技能返回 False。"""
+    name = str(name or "").strip()
+    if not name:
+        return False
+    alias_list = []
+    for raw in [name] + list(aliases or []):
+        value = str(raw or "").strip()
+        if value and value not in alias_list:
+            alias_list.append(value)
+    version = datetime.now().strftime("cat-%Y%m%d-%H%M%S")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT IGNORE INTO skill_catalog "
+                "(name, aliases_json, category, roadmap_order, enabled, version, source) "
+                "VALUES (%s, %s, %s, %s, 1, %s, %s)",
+                (name, json.dumps(alias_list, ensure_ascii=False), str(category or ""),
+                 float(roadmap_order), version, str(source or "manual")),
+            )
+            added = cur.rowcount > 0
+            if added:
+                set_skill_catalog_meta("version", version)
+            return added
+
+
+def list_skill_candidates(status: str = "", limit: int = 200) -> list[dict]:
+    where, params = "", []
+    if status:
+        where = "WHERE status=%s"
+        params.append(status)
+    params.append(limit)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM skill_candidates "
+                f"{where} ORDER BY hit_count DESC, id ASC LIMIT %s",
+                tuple(params),
+            )
+            return cur.fetchall()
+
+
+def get_skill_candidate(candidate_id: int) -> dict | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM skill_candidates WHERE id=%s", (candidate_id,))
+            return cur.fetchone()
+
+
+def reset_pending_skill_candidates() -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM skill_candidates WHERE status='pending'")
+
+
+def upsert_skill_candidates(rows: list[dict]) -> None:
+    columns = (
+        "raw_mention", "normalized_key", "hit_count", "evidence_sentence",
+        "status", "llm_status", "source",
+    )
+    values = [
+        tuple(row.get(col, "pending" if col == "status" else
+                       "none" if col == "llm_status" else
+                       0 if col == "hit_count" else "") for col in columns)
+        for row in rows
+    ]
+    if not values:
+        return
+    placeholders = ", ".join(["%s"] * len(columns))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                f"INSERT INTO skill_candidates ({', '.join(columns)}) VALUES ({placeholders}) "
+                "ON DUPLICATE KEY UPDATE "
+                "hit_count=IF(status='pending', VALUES(hit_count), hit_count), "
+                "evidence_sentence=IF(status='pending', VALUES(evidence_sentence), evidence_sentence), "
+                "source=IF(status='pending', VALUES(source), source)",
+                values,
+            )
+
+
+def update_skill_candidate(candidate_id: int, **fields) -> None:
+    allowed = {"status", "llm_status", "llm_suggestion_json"}
+    updates, values = [], []
+    for key, value in fields.items():
+        if key in allowed:
+            updates.append(f"{key}=%s")
+            values.append(value)
+    if not updates:
+        return
+    values.append(candidate_id)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE skill_candidates SET {', '.join(updates)} WHERE id=%s",
+                tuple(values),
+            )
 
