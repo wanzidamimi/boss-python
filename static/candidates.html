@@ -124,7 +124,7 @@
           <td><input data-name="${r.id}" value="${esc(name)}" /></td>
           <td><input data-cat="${r.id}" value="${esc(cat)}" placeholder="待分类" /></td>
           <td>
-            <button class="primary mini" onclick="approve(${r.id})">加入词典</button>
+            <button class="primary mini" onclick="approve(${r.id}, '${esc(r.normalized_key)}')">加入词典</button>
             <button class="danger mini" onclick="reject(${r.id})">忽略</button>
           </td>
         </tr>`;
@@ -140,13 +140,13 @@
           : 'LLM 未配置，可人工确认；配置 BOSS_LLM_BASE_URL / BOSS_LLM_API_KEY 后可启用';
       } catch (e) { toast('加载候选失败：'+e.message,'err'); }
     }
-    async function approve(id) {
+    async function approve(id, normalizedKey) {
       const name = document.querySelector(`[data-name="${id}"]`).value.trim();
       const category = document.querySelector(`[data-cat="${id}"]`).value.trim();
       try {
         const res = await api(`/api/skills/candidates/${id}/approve`, {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({name, category})
+          body: JSON.stringify({name, category, normalized_key: normalizedKey || ''})
         });
         toast(res.added ? `已加入正式技能池：${res.name}` : `正式池已存在：${res.name}`, 'ok');
         await load();

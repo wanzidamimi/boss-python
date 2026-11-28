@@ -1087,6 +1087,16 @@ def get_skill_candidate(candidate_id: int) -> dict | None:
             return cur.fetchone()
 
 
+def get_skill_candidate_by_key(normalized_key: str) -> dict | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM skill_candidates WHERE normalized_key=%s LIMIT 1",
+                (str(normalized_key or ""),),
+            )
+            return cur.fetchone()
+
+
 def reset_pending_skill_candidates() -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:

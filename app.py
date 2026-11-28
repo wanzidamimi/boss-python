@@ -81,6 +81,7 @@ class CandidateApproveRequest(BaseModel):
     aliases: list[str] = []
     category: str = ""
     roadmap_order: float = 999
+    normalized_key: str = ""
 
 
 def log_line(log_path, message):
@@ -416,8 +417,9 @@ def _startup_candidate_mining():
 def startup_event():
     db.init_db()
     progress_store.cleanup_progress(7)
+    # 候选挖掘会重建 pending 行并改变 ID，必须在服务接收页面请求前完成
+    _startup_candidate_mining()
     threading.Thread(target=worker, daemon=True).start()
-    threading.Thread(target=_startup_candidate_mining, daemon=True).start()
 
 
 @app.get("/")
@@ -539,6 +541,7 @@ def api_approve_candidate(candidate_id: int, req: CandidateApproveRequest):
             category=req.category,
             roadmap_order=req.roadmap_order,
             source="manual",
+            normalized_key=req.normalized_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

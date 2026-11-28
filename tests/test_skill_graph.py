@@ -138,6 +138,18 @@ class CandidatePoolTest(unittest.TestCase):
         self.assertEqual(result["applied"], 1)
         approve.assert_called_once()
 
+    def test_approve_falls_back_when_id_is_stale(self):
+        row = {"id": 88, "raw_mention": "Kafka", "normalized_key": "kafka",
+               "llm_suggestion_json": None}
+        with patch.object(skill_graph.db, "get_skill_candidate", return_value=None), \
+             patch.object(skill_graph.db, "get_skill_candidate_by_key", return_value=row) as by_key, \
+             patch.object(skill_graph.db, "add_skill_catalog_item", return_value=True), \
+             patch.object(skill_graph.db, "update_skill_candidate") as update:
+            result = skill_graph.approve_candidate(1, normalized_key="kafka")
+        by_key.assert_called_once_with("kafka")
+        self.assertEqual(result["candidate_id"], 88)
+        update.assert_called_once_with(88, status="approved")
+
     def test_mine_candidates_rebuilds_pending_pool(self):
         details = [{"id": 1, "post_description": "熟悉 Python、Milvus 和向量数据库；有数据清洗经验"}]
         with patch.object(skill_graph.db, "list_latest_details_with_description", return_value=details), \

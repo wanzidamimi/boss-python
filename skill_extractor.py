@@ -212,9 +212,9 @@ def canonical_skill(value: str) -> str | None:
     return compiled["alias_map"].get(key) or compiled["name_map"].get(key)
 
 
-def extract_skills(text: str) -> list[dict]:
+def extract_skills(text: str, compiled: dict | None = None) -> list[dict]:
     """从一个 JD 正文抽取正式技能；同一技能在一条 JD 中最多出现一次。"""
-    compiled = get_compiled_catalog()
+    compiled = compiled or get_compiled_catalog()
     found: dict[str, dict] = {}
 
     for clause in split_clauses(text):
@@ -276,9 +276,9 @@ def _valid_candidate(value: str) -> bool:
     return True
 
 
-def extract_candidates(text: str) -> list[dict]:
+def extract_candidates(text: str, compiled: dict | None = None) -> list[dict]:
     """从 JD 正文中找出未被正式词典命中的候选技能片段。"""
-    compiled = get_compiled_catalog()
+    compiled = compiled or get_compiled_catalog()
     found: dict[str, dict] = {}
 
     for clause in split_clauses(text):

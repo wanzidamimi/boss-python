@@ -23,13 +23,14 @@ def get_catalog() -> dict:
 def rebuild_skill_index() -> dict:
     """用最新版详情正文重建 job_skills；旧结果整体覆盖。"""
     catalog = skill_extractor.load_catalog()
+    compiled = skill_extractor.get_compiled_catalog()
     details = db.list_latest_details_with_description()
     db.clear_job_skills()
 
     inserted = 0
     jobs_with_skills = 0
     for detail in details:
-        extracted = skill_extractor.extract_skills(detail["post_description"])
+        extracted = skill_extractor.extract_skills(detail["post_description"], compiled)
         rows = [
             {
                 **row,
@@ -416,10 +417,11 @@ def recommend_positions(position: str = "") -> dict:
 def mine_candidates(min_hits: int = 2, max_rows: int = 200) -> dict:
     """扫描详情正文中未命中正式词典的片段，重建 pending 候选池。"""
     details = db.list_latest_details_with_description()
+    compiled = skill_extractor.get_compiled_catalog()
     collected: dict[str, dict] = {}
 
     for detail in details:
-        for candidate in skill_extractor.extract_candidates(detail["post_description"]):
+        for candidate in skill_extractor.extract_candidates(detail["post_description"], compiled):
             key = candidate["normalized_key"]
             item = collected.setdefault(key, {
                 "raw_mention": candidate["raw_mention"],
@@ -471,9 +473,11 @@ def list_candidates(status: str = "", limit: int = 200) -> list[dict]:
 
 def approve_candidate(candidate_id: int, name: str = "", aliases: list[str] | None = None,
                       category: str = "", roadmap_order: float = 999,
-                      source: str = "manual") -> dict:
-    """把候选技能确认进正式技能池。"""
+                      source: str = "manual", normalized_key: str = "") -> dict:
+    """把候选技能确认进正式技能池；ID 失效时可再用 normalized_key 回退。"""
     row = db.get_skill_candidate(candidate_id)
+    if not row and normalized_key:
+        row = db.get_skill_candidate_by_key(normalized_key)
     if not row:
         raise ValueError("候选不存在")
 
@@ -509,9 +513,10 @@ def approve_candidate(candidate_id: int, name: str = "", aliases: list[str] | No
     added = db.add_skill_catalog_item(
         final_name, final_aliases, final_category, roadmap_order, source
     )
-    db.update_skill_candidate(candidate_id, status="approved")
+    actual_id = int(row["id"])
+    db.update_skill_candidate(actual_id, status="approved")
     return {
-        "candidate_id": candidate_id,
+        "candidate_id": actual_id,
         "added": added,
         "name": final_name,
         "category": final_category,
