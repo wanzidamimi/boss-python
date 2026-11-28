@@ -488,21 +488,26 @@ def approve_candidate(candidate_id: int, name: str = "", aliases: list[str] | No
         except (TypeError, ValueError):
             suggestion = None
 
-    final_name = str(name or "").strip()
+    manual_name = str(name or "").strip()
+    manual_category = str(category or "").strip()
+    final_name = manual_name
     if not final_name and suggestion:
         final_name = str(suggestion.get("canonical_name") or "").strip()
     final_name = final_name or row["raw_mention"]
 
-    final_category = str(category or "").strip()
+    final_category = manual_category
     if not final_category and suggestion:
         final_category = str(suggestion.get("category") or "").strip()
     final_category = final_category or "待分类"
 
     final_aliases = list(aliases or [])
     if not final_aliases:
-        final_aliases = [row["raw_mention"], row["normalized_key"]]
+        final_aliases = [row["raw_mention"], row["normalized_key"], final_name]
         if suggestion and suggestion.get("canonical_name"):
             final_aliases.append(str(suggestion["canonical_name"]))
+    elif final_name not in final_aliases:
+        final_aliases.append(final_name)
+    final_aliases = list(dict.fromkeys(a for a in final_aliases if a))
 
     if suggestion and not roadmap_order:
         try:
@@ -514,7 +519,12 @@ def approve_candidate(candidate_id: int, name: str = "", aliases: list[str] | No
         final_name, final_aliases, final_category, roadmap_order, source
     )
     actual_id = int(row["id"])
-    db.update_skill_candidate(actual_id, status="approved")
+    update_fields = {"status": "approved"}
+    if manual_name:
+        update_fields["manual_name"] = manual_name
+    if manual_category:
+        update_fields["manual_category"] = manual_category
+    db.update_skill_candidate(actual_id, **update_fields)
     return {
         "candidate_id": actual_id,
         "added": added,

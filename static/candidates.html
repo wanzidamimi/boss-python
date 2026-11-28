@@ -111,8 +111,8 @@
       if (!rows.length) { $('candidateBody').innerHTML='<tr><td colspan="9"><div class="empty">暂无候选技能</div></td></tr>'; return; }
       $('candidateBody').innerHTML = rows.map(r => {
         const s = r.llm_suggestion;
-        const name = s && s.canonical_name ? s.canonical_name : r.raw_mention;
-        const cat = s && s.category ? s.category : '';
+        const name = r.manual_name || (s && s.canonical_name) || r.raw_mention;
+        const cat = r.manual_category || (s && s.category) || '';
         const statusCls = ['pending','approved','rejected'].includes(r.status) ? r.status : 'pending';
         return `<tr>
           <td><input type="checkbox" class="candidate-check" value="${r.id}" style="width:auto;min-width:auto;" /></td>
@@ -121,8 +121,8 @@
           <td><span class="badge ${statusCls}">${esc(r.status)}</span><div class="hint">${esc(r.llm_status || '')}</div></td>
           <td class="evidence">${esc(r.evidence_sentence || '')}</td>
           <td class="suggestion">${suggestionText(s)}</td>
-          <td><input data-name="${r.id}" value="${esc(name)}" /></td>
-          <td><input data-cat="${r.id}" value="${esc(cat)}" placeholder="待分类" /></td>
+          <td><input data-name="${r.id}" value="${esc(name)}" title="正式写入技能池的名称；会保存到候选记录" /></td>
+          <td><input data-cat="${r.id}" value="${esc(cat)}" placeholder="待分类" title="正式写入技能池的分类；会保存到候选记录" /></td>
           <td>
             <button class="primary mini" onclick="approve(${r.id}, '${esc(r.normalized_key)}')">加入词典</button>
             <button class="danger mini" onclick="reject(${r.id})">忽略</button>

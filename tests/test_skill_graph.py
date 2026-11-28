@@ -138,6 +138,22 @@ class CandidatePoolTest(unittest.TestCase):
         self.assertEqual(result["applied"], 1)
         approve.assert_called_once()
 
+    def test_approve_saves_manual_name_and_category(self):
+        row = {"id": 7, "raw_mention": "SQL", "normalized_key": "sql",
+               "llm_suggestion_json": None}
+        with patch.object(skill_graph.db, "get_skill_candidate", return_value=row), \
+             patch.object(skill_graph.db, "add_skill_catalog_item", return_value=True) as add, \
+             patch.object(skill_graph.db, "update_skill_candidate") as update:
+            result = skill_graph.approve_candidate(
+                7, name="结构化查询语言", category="数据库", source="manual"
+            )
+        self.assertEqual(result["name"], "结构化查询语言")
+        add.assert_called_once()
+        self.assertIn("结构化查询语言", add.call_args.args[1])
+        update.assert_called_once_with(
+            7, status="approved", manual_name="结构化查询语言", manual_category="数据库"
+        )
+
     def test_approve_falls_back_when_id_is_stale(self):
         row = {"id": 88, "raw_mention": "Kafka", "normalized_key": "kafka",
                "llm_suggestion_json": None}

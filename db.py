@@ -185,6 +185,8 @@ CREATE TABLE IF NOT EXISTS skill_candidates (
   hit_count           INT NOT NULL DEFAULT 0 COMMENT '命中职位数',
   evidence_sentence   TEXT NULL COMMENT '证据句',
   status              VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+  manual_name         VARCHAR(128) NOT NULL DEFAULT '' COMMENT '人工填写的标准名称',
+  manual_category     VARCHAR(64) NOT NULL DEFAULT '' COMMENT '人工填写的分类',
   llm_status          VARCHAR(16) NOT NULL DEFAULT 'none' COMMENT 'none/suggested/error',
   llm_suggestion_json TEXT NULL COMMENT 'LLM 结构化建议',
   source              VARCHAR(32) NOT NULL DEFAULT 'rule',
@@ -344,6 +346,10 @@ def _ensure_schema(cur):
                 "encrypt_job_id VARCHAR(255) NOT NULL DEFAULT '' "
                 "COMMENT '跨会话稳定的职位ID, 去重用'")
     _add_index(cur, "job_details", "idx_detail_encrypt", "encrypt_job_id")
+    _add_column(cur, "skill_candidates", "manual_name",
+                "manual_name VARCHAR(128) NOT NULL DEFAULT '' COMMENT '人工填写的标准名称'")
+    _add_column(cur, "skill_candidates", "manual_category",
+                "manual_category VARCHAR(64) NOT NULL DEFAULT '' COMMENT '人工填写的分类'")
     # 旧详情行补齐 encrypt_job_id（通过 lid 关联 jobs）
     if _table_exists(cur, "jobs"):
         cur.execute(
@@ -1130,7 +1136,7 @@ def upsert_skill_candidates(rows: list[dict]) -> None:
 
 
 def update_skill_candidate(candidate_id: int, **fields) -> None:
-    allowed = {"status", "llm_status", "llm_suggestion_json"}
+    allowed = {"status", "llm_status", "llm_suggestion_json", "manual_name", "manual_category"}
     updates, values = [], []
     for key, value in fields.items():
         if key in allowed:

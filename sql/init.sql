@@ -235,6 +235,8 @@ CREATE TABLE IF NOT EXISTS skill_candidates (
   hit_count           INT          NOT NULL DEFAULT 0      COMMENT '命中职位数',
   evidence_sentence   TEXT NULL                            COMMENT '证据句',
   status              VARCHAR(16)  NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
+  manual_name         VARCHAR(128) NOT NULL DEFAULT ''       COMMENT '人工填写的标准名称',
+  manual_category     VARCHAR(64)  NOT NULL DEFAULT ''       COMMENT '人工填写的分类',
   llm_status          VARCHAR(16)  NOT NULL DEFAULT 'none' COMMENT 'none/suggested/error',
   llm_suggestion_json TEXT NULL                            COMMENT 'LLM 结构化建议',
   source              VARCHAR(32)  NOT NULL DEFAULT 'rule',
